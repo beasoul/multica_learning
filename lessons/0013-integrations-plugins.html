@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0013 · 集成与插件系统 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 13 课 / 共 14 课</p>
+<p class="kicker">Lesson 13</p>
+<h1>集成与插件：让 Multica 长出去</h1>
+<p class="deck">Multica 有两套完全不同的"扩展"机制，名字容易混：<strong>集成</strong>是编译进服务端的第一方适配器，<strong>插件</strong>是对外公开的第三方契约。这一课把两者分开讲清，重点在插件契约的三个概念。</p>
+<div class="meta">
+  <span>约 40 分钟</span>
+  <span>对应源码：internal/integrations/ · pkg/plugincontract/ · packages/plugin-sdk/</span>
+</div>
+
+<h2>一、先分清两套东西</h2>
+
+<table>
+  <thead><tr><th></th><th>集成 Integrations</th><th>插件 Plugins</th></tr></thead>
+  <tbody>
+    <tr><td>谁写的</td><td>Multica 自己</td><td>第三方（也可以是你）</td></tr>
+    <tr><td>跑在哪</td><td>编译进 Go 服务端，进程内</td><td>宿主之外，通过契约通信</td></tr>
+    <tr><td>代码位置</td><td><code>server/internal/integrations/</code></td><td><code>server/pkg/plugincontract/</code> + <code>packages/plugin-sdk/</code></td></tr>
+    <tr><td>你怎么用</td><td>在界面上连接、授权</td><td>安装插件、配置它、让它挂载 UI 或订阅事件</td></tr>
+    <tr><td>命名暗示</td><td>在 <code>internal/</code> 里 = 不对外</td><td>在 <code>pkg/</code> 里 = 对外公开（第 3 课那条规则）</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>位置本身就是承诺：<code>plugincontract</code> 放在 <code>pkg/</code> 而不是 <code>internal/</code>，意味着<strong>它是可以被外部依赖的稳定契约</strong>。源码注释也把这条写明了：</p>
+<p><code>Package plugincontract defines the versioned public contract between plugin authors and the Multica host. It must stay independent from private handlers, services, and database implementations.</code></p>
+</div>
+
+<h2>二、集成：三类，看目录就懂</h2>
+
+<p><code>server/internal/integrations/</code> 下的子目录就是全集：</p>
+
+<pre><code>channel, composio, dingtalk, ghsnapshot, lark, slack, telegram, vcs, wecom</code></pre>
+
+<table>
+  <thead><tr><th>类别</th><th>目录</th><th>它让你做什么</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>代码仓库</strong></td>
+      <td><code>vcs</code>、<code>ghsnapshot</code></td>
+      <td>把 Issue 和 PR 关联起来；仓库侧事件回灌成 Multica 里的动作</td>
+    </tr>
+    <tr>
+      <td><strong>即时通讯</strong></td>
+      <td><code>slack</code>、<code>lark</code>、<code>dingtalk</code>、<code>telegram</code>、<code>wecom</code>、<code>channel</code></td>
+      <td>在聊天里建 Issue、指派 Agent、收进度通知</td>
+    </tr>
+    <tr>
+      <td><strong>第三方 SaaS 桥</strong></td>
+      <td><code>composio</code></td>
+      <td>把外部工具接入成 Agent 可用的能力</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>它们在路由上的入口全是 webhook 形态——都是"外部系统打进来"：</p>
+
+<pre><code>POST /api/webhooks/github                    # GitHub 事件
+GET  /api/github/setup                       # GitHub 安装回调
+POST /api/webhooks/vcs/{connectionId}        # 各 VCS（Forgejo/Gitea/GitLab 等）
+POST /api/webhooks/autopilots/{token}        # Autopilot 的 webhook 触发器
+GET  /api/integrations/composio/callback     # Composio 授权回调</code></pre>
+
+<p>注意最后一条与 Autopilot 的联动：<strong>Autopilot 的 webhook 触发器就是靠一个带 token 的 URL 收事件的</strong>——这也是第 5 课那个 <code>deferred</code> 状态的另一个来源（定时或 webhook 一到就排一条 Run）。</p>
+
+<h2>三、插件契约：三种关系</h2>
+
+<p>这是本课的核心。<code>plugincontract/manifest.go</code> 开头的注释把整个模型压缩成了三行，原文照抄：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <pre><code>A plugin relates to Multica in exactly three ways:
+  - Action   (plugin -&gt; Multica): host capabilities the plugin calls.
+  - Hook     (Multica -&gt; plugin): plugin capabilities the host calls.
+  - Resource (no call at all):    static contributions such as skill text.</code></pre>
+</div>
+
+<table>
+  <thead><tr><th>关系</th><th>方向</th><th>例子</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Action</strong></td><td>插件 → Multica</td><td>插件调用宿主的读写能力（受 scope 限制）</td></tr>
+    <tr><td><strong>Hook</strong></td><td>Multica → 插件</td><td>宿主在事件发生时回调插件</td></tr>
+    <tr><td><strong>Resource</strong></td><td>无调用</td><td>静态贡献，例如一段 Skill 文本</td></tr>
+  </tbody>
+</table>
+
+<p>紧接着还有一句看起来抽象、但很值钱的说明：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>"Who triggers" and "what capability is called" are orthogonal: a hook is declared once and may be invoked by any of the triggers it opts into.</code></p>
+</div>
+
+<p>翻译/展开：<strong>hook 声明一次，而"谁能触发它"是另一个维度。</strong>触发器（<code>event</code> 事件、<code>schedule</code> 定时）只是 opt-in 声明，不改变 hook 本身做什么。</p>
+
+<p>这带来一个很干净的心智模型：<strong>能力与触发解耦</strong>。你想让同一个能力既能被"事件"触发又能被"定时"触发，不需要写两份实现。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这在 Oracle 里的对应物是<strong>包 + 作业的分离</strong>：<code>PKG_X.DO_WORK</code> 是能力（被调用的东西），而"谁来调"可以是应用代码、也可以是 <code>DBMS_SCHEDULER</code> 的 job、也可以是一个触发器。</p>
+<p>把"能力"和"触发方式"写在一个地方的代码，通常会在需要第二种触发方式时被迫复制一遍。Multica 的设计从契约层面避免了这件事。</p>
+</div>
+
+<h3>Surface：宿主挂载的 iframe</h3>
+
+<p>注释里对 surface 的定义很短：<strong>surface 是宿主挂在固定位置的 iframe</strong>。也就是说插件不只是后台逻辑，它可以有界面，但界面是被<em>挂载</em>到宿主里的，而不是插件自己独立成站。</p>
+
+<p>这一点在路由上有痕迹：插件界面走 <code>GET /plugin-surfaces/{token}</code> 提供，而给用户的是短期启动地址 <code>/api/workspaces/{id}/plugins/{installationId}/surfaces/{surfaceKey}/launch</code>。源码注释解释了为什么这么做：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Member-visible because opening an issue is what asks for it; executable bytes stay off the authenticated app/API origin.</code></p>
+</div>
+
+<p>即：<strong>可执行的插件字节不放在已认证的主站源上</strong>，而是通过一个短期 token 换到独立路径去加载。这是把"插件"和"应用本体"的信任域分开——和浏览器同源策略打交道的常规做法。</p>
+
+<h3>Scopes：一份封闭清单</h3>
+
+<p>插件能调用宿主哪些能力，由 manifest 里声明的 scope 决定。清单<strong>是封闭的</strong>（源码原话：<code>This list is complete and closed; anything else is rejected at parse time</code>）：</p>
+
+<table>
+  <thead><tr><th>Scope</th><th>含义</th></tr></thead>
+  <tbody>
+    <tr><td><code>issues:read</code> / <code>issues:write</code></td><td>读写 Issue</td></tr>
+    <tr><td><code>comments:read</code> / <code>comments:write</code></td><td>读写评论</td></tr>
+    <tr><td><code>tasks:read</code> / <code>tasks:write</code></td><td>读写 Run</td></tr>
+    <tr><td><code>agents:read</code></td><td>读 Agent（注意：没有 <code>agents:write</code>）</td></tr>
+    <tr><td><code>members:read</code></td><td>读成员</td></tr>
+    <tr><td><code>storage:user</code> / <code>storage:workspace</code></td><td>两种粒度的存储</td></tr>
+    <tr><td><code>net:&lt;domain&gt;</code></td><td><strong>唯一带参数的 scope</strong>：控制插件能访问哪些外部域名</td></tr>
+  </tbody>
+</table>
+
+<p><code>net:</code> 这个 scope 的作用点很关键：它<strong>同时</strong>决定两件事——iframe 的 CSP <code>connect-src</code> 白名单，以及 hook 传输时的宿主校验。</p>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>只声明一次、两处生效。这是"用一个配置源代替两个平行配置"的典型手法——本项目多处都用这个思路（还记得第 4 课 CORS 白名单被 WebSocket 的 Origin 校验复用吗？同一招）。</p>
+</div>
+
+<h3>Hook 触发器与配置表单</h3>
+
+<p>两个细节值得记：</p>
+
+<ul>
+  <li><strong><code>event</code> 与 <code>schedule</code> 都是异步的</strong>，两者都不阻塞面向用户的宿主请求。也就是说插件的回调变慢不会拖慢你的界面。</li>
+  <li><strong><code>schedule</code> 是轮询原语，不是高频定时器</strong>，有一个下限。源码给的理由很实在：<code>The floor keeps one installation from turning its manifest into an unbounded source of outbound traffic</code>——防止一个插件靠写 manifest 把自己的出站流量变成无限。</li>
+  <li><strong>配置表单由宿主渲染</strong>：契约里只支持 JSON Schema 的一个<em>故意很小</em>的子集，因此<strong>插件不需要自带表单 UI</strong>。</li>
+</ul>
+
+<h2>四、两边的代码在哪</h2>
+
+<table>
+  <thead><tr><th>位置</th><th>语言</th><th>角色</th></tr></thead>
+  <tbody>
+    <tr><td><code>server/pkg/plugincontract/manifest.go</code></td><td>Go</td><td>契约定义：manifest 结构、scope、hook 触发器、surface 类型、resource 类型</td></tr>
+    <tr><td><code>server/pkg/plugincontract/capabilities.go</code></td><td>Go</td><td>宿主提供的能力清单</td></tr>
+    <tr><td><code>server/pkg/plugincontract/bundle.go</code></td><td>Go</td><td>打包与校验（含体积上限 <code>MaxManifestSize</code>）</td></tr>
+    <tr><td><code>packages/plugin-sdk/</code></td><td>TypeScript</td><td>给插件作者的 SDK：<code>index.ts</code> + <code>protocol.ts</code></td></tr>
+    <tr><td><code>server/internal/service/plugin*.go</code></td><td>Go</td><td>服务端实现：安装、钩子调用、事件分发、调度、存储、token、包管理（十几文件，全部在 <code>internal/</code>）</td></tr>
+  </tbody>
+</table>
+
+<p>注意最后一行：<code>service/</code> 下一整族 <code>plugin_*.go</code> 文件覆盖了 <code>plugin.go</code>、<code>plugin_action.go</code>、<code>plugin_hook.go</code>、<code>plugin_event_bridge.go</code>、<code>plugin_event_dispatch.go</code>、<code>plugin_mcp_transport.go</code>、<code>plugin_schedule.go</code>、<code>plugin_skill.go</code>、<code>plugin_storage.go</code>、<code>plugin_token.go</code>、<code>plugin_package.go</code>、<code>plugin_agent_tools.go</code>。</p>
+
+<p>这个文件清单本身就是插件能力的地图——<strong>想知道插件系统"能做哪些事"，读文件名就够了</strong>。</p>
+
+<h2>五、权限：谁能装插件</h2>
+
+<p>回到第 4 课那张路由分组表，插件相关接口的准入分得很清楚：</p>
+
+<table>
+  <thead><tr><th>动作</th><th>角色要求</th></tr></thead>
+  <tbody>
+    <tr><td>看装了哪些插件</td><td>member 即可</td></tr>
+    <tr><td>获取插件界面的启动地址</td><td>member 即可</td></tr>
+    <tr><td>安装 / 配置 / 移除插件</td><td><strong>owner 或 admin</strong></td></tr>
+  </tbody>
+</table>
+
+<p>源码注释给的理由是：<em>member 可见是为了让他知道自己所在的工作区挂了什么、持有哪些 scope</em>；而改动必须由管理员做。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>"member 能看到插件持有哪些 scope"这件事是安全上的必要设计：<strong>插件是在你的工作区里以该工作区的身份行动的</strong>。一个要了 <code>issues:write</code> 的插件能改你的任务单——所以普通成员有权知道它存在、它要了什么。</p>
+</div>
+
+<h2>六、检索练习</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="对。Action 是插件调宿主，Hook 是宿主调插件，Resource 不产生任何调用。"
+     data-no="回到那三行原文：注意箭头方向。">
+  <p class="q">1. 插件契约里 Hook 与 Action 的区别是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">Hook 是同步的，Action 是异步的，其余相同</button>
+    <button class="opt" data-key="b">Hook 用于 UI，Action 用于后台任务</button>
+    <button class="opt" data-key="c">Action 是插件调用宿主能力；Hook 是宿主调用插件能力</button>
+    <button class="opt" data-key="d">Hook 需要声明 scope，Action 不需要</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="正确。能力与触发解耦：hook 声明一次，可被它 opt-in 的任一触发器调用。"
+     data-no="回想那句 orthogonal：声明一次、多种触发。">
+  <p class="q">2. 你想让同一个插件能力既能被"新评论"触发、也能每天定时触发，正确做法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">声明一个 hook，给它 opt-in 事件与定时两种触发器</button>
+    <button class="opt" data-key="b">声明两个 hook，各自绑定一种触发器，实现分别写</button>
+    <button class="opt" data-key="c">声明一个 Action，由宿主在两种时机分别调用</button>
+    <button class="opt" data-key="d">声明一个 Resource，由宿主按需读取并执行</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。net:<domain> 同时决定 iframe 的 connect-src 白名单与 hook 传输的宿主校验。"
+     data-no="回想那个「一份声明、两处生效」的 scope。">
+  <p class="q">3. 插件需要调用一个外部 API，安全上由谁控制、控制在哪两处生效？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">由用户在工作区设置里填白名单，作用于服务端出站代理与数据库权限</button>
+    <button class="opt" data-key="b">由 manifest 里的 net 域 scope 声明，同时作用于 iframe 的 CSP 白名单与 hook 传输校验</button>
+    <button class="opt" data-key="c">由插件的 package.json 声明，作用于构建期打包与运行期 DNS 解析</button>
+    <button class="opt" data-key="d">不需要声明，插件以工作区身份运行，出站网络不受限制</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，说出插件与 Multica 的三种关系，各举一例；并说明为什么这些契约放在 <code>pkg/</code> 而不是 <code>internal/</code>。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ul>
+      <li><strong>Action（插件 → Multica）</strong>：插件调用宿主能力，例如读 Issue、写评论。受 scope 限制。</li>
+      <li><strong>Hook（Multica → 插件）</strong>：宿主在事件或定时点回调插件。声明一次，可被多种触发器调用。</li>
+      <li><strong>Resource（无调用）</strong>：静态贡献，例如一段 Skill 文本。</li>
+    </ul>
+    <p>放在 <code>pkg/</code> 的原因：Go 的 <code>internal/</code> 是编译器强制的外部不可 import 边界（第 3 课）。契约需要被插件作者依赖，所以<strong>必须放在 <code>pkg/</code></strong>；而它的实现（安装、调度、存储、token）全部留在 <code>internal/service/plugin_*.go</code>，不对外暴露。</p>
+    <p>这就是"公开契约 + 私有实现"的标准切法：定义对外，实现封起来。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/pkg/plugincontract/manifest.go</code>——文件开头 100 行注释就是整个插件模型的定义，含三种关系、触发器、scope 封闭清单与设计理由。</p>
+  <p>辅助：<code>packages/plugin-sdk/README.md</code>（给插件作者看的）；<code>server/internal/integrations/</code>（集成侧）；<code>apps/docs/content/docs/github-integration.zh.mdx</code> 与各 IM 集成文档。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："集成能不能也当插件写？"——这是个很好的边界问题：集成是<em>第一方、进程内</em>，插件是<em>第三方、跨信任域</em>。哪些东西必须留在集成里，答案在 <code>plugincontract</code> 的 scope 清单里能找到线索（比如插件没有 <code>agents:write</code>）。</p>
+
+<div class="lesson-nav">
+  <a href="0012-selfhost.html">← 0012 · 自部署与本地开发</a>
+  <a href="0014-troubleshooting.html">0014 · 故障排查与动手改一处 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

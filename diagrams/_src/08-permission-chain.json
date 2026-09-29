@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "谁可以运行哪个智能体：权限校验链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "check-chain", "label": "四道校验", "focus": ["actor", "member", "access", "runtime", "token"], "note": "成员身份、智能体 Access、运行时归属、运行级凭据，缺一不可。" },
+      { "id": "denial", "label": "什么时候会被拒绝", "focus": ["access", "denied"], "note": "角色再高也绕不过别人智能体的「仅自己」设置。" },
+      { "id": "result", "label": "通过之后拿到什么", "focus": ["token", "run"], "note": "拿到的是绑定 agent 与 run 的一次性凭据，不是你的账号。" }
+    ]
+  },
+  "lanes": [
+    { "id": "triggers", "label": "触发者" },
+    { "id": "checks", "label": "服务端校验链" },
+    { "id": "result", "label": "结果" },
+    { "id": "exceptions", "label": "被拒绝", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "ph-trigger", "label": "发起", "fromCol": 0, "toCol": 0 },
+    { "id": "ph-check", "label": "四道校验", "fromCol": 1, "toCol": 3, "variant": "emphasis" },
+    { "id": "ph-result", "label": "放行", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["actor", "member", "access", "runtime", "token", "run"],
+  "nodes": [
+    { "id": "actor", "lane": "triggers", "col": 0, "type": "external", "label": "发起者", "sublabel": "成员 / CLI / IM" },
+    { "id": "member", "lane": "checks", "col": 1, "type": "security", "label": "① 成员身份", "sublabel": "按 workspace 过滤" },
+    { "id": "access", "lane": "checks", "col": 2, "type": "security", "label": "② Access", "sublabel": "仅自己 / 指定 / 全部" },
+    { "id": "runtime", "lane": "checks", "col": 3, "type": "security", "label": "③ 运行时归属", "sublabel": "私有还是已公开" },
+    { "id": "token", "lane": "result", "col": 4, "type": "security", "label": "④ 签发凭据", "sublabel": "绑定 agent 与 task" },
+    { "id": "run", "lane": "result", "col": 5, "type": "backend", "label": "创建 Run", "sublabel": "一条 queued task" },
+    { "id": "denied", "lane": "exceptions", "col": 2, "type": "security", "label": "拒绝", "sublabel": "403 / 资源不存在", "tag": "不暴露存在性" }
+  ],
+  "edges": [
+    { "id": "c1", "from": "actor", "to": "member", "label": "发起", "variant": "emphasis", "role": "main" },
+    { "id": "c2", "from": "member", "to": "access", "label": "是成员", "role": "main" },
+    { "id": "c3", "from": "access", "to": "runtime", "label": "允许我运行", "variant": "emphasis", "role": "main" },
+    { "id": "c4", "from": "runtime", "to": "token", "label": "运行时可用", "role": "main" },
+    { "id": "c5", "from": "token", "to": "run", "label": "落库入队", "variant": "emphasis", "role": "main" },
+    { "id": "c6", "from": "access", "to": "denied", "label": "不在允许范围", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "角色管配置，Access 管运行", "items": ["owner / admin / member 决定能否改设置、邀请人与管理成员", "「能运行哪些智能体」由智能体自己的 Access 决定", "只有智能体的 owner 能改它的 Access，工作区 owner 也不能绕过"] },
+    { "dot": "cyan", "title": "四种令牌各管一段", "items": ["浏览器 JWT 存在 HttpOnly cookie multica_auth", "PAT 前缀 mul_，代表账号，用于 CLI 与脚本", "mat_ 是运行级一次性凭据，最长 24 小时，运行结束即清理", "mdt_ 是工作区范围的 daemon 认证"] },
+    { "dot": "amber", "title": "边界要说清楚", "items": ["每次执行拥有 daemon 所属系统账户的全部权限", "Multica 不提供文件系统沙箱保证，隔离要靠专用用户、容器或虚拟机", "运行级凭据不能以你的身份做其他事，但工具本身跑在你自己机器上"] }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "自部署拓扑：一台机器跑完整个服务端",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1020, 800],
+    "views": [
+      { "id": "request-path", "label": "请求路径", "focus": ["browser", "proxy", "frontend", "backend"], "note": "浏览器只跟前端说话，前端再把 /api 与 /ws 代理给 backend。" },
+      { "id": "data-plane", "label": "数据与迁移", "focus": ["backend", "postgres"], "note": "backend 容器启动时先跑 migrate 再启动 server，所以迁移失败会直接退出。" },
+      { "id": "external-services", "label": "可选的外部依赖", "focus": ["mail", "github"], "note": "邮件用于验证码与邀请；GitHub App 用于 PR 关联，两者都可以暂时不配。" }
+    ]
+  },
+  "components": [
+    { "id": "browser", "type": "external", "label": "浏览器 / 桌面端", "sublabel": "http://localhost:3000", "pos": [60, 70], "size": [220, 74] },
+    { "id": "proxy", "type": "cloud", "label": "反向代理", "sublabel": "Caddy / Ingress", "pos": [60, 240], "size": [220, 74], "tag": "生产建议加" },
+    { "id": "frontend", "type": "frontend", "label": "frontend 容器", "sublabel": "Next.js standalone · :3000", "pos": [60, 430], "size": [220, 84] },
+    { "id": "backend", "type": "backend", "label": "backend 容器", "sublabel": "Go API + daemon WS · :8080", "pos": [370, 430], "size": [230, 84] },
+    { "id": "postgres", "type": "database", "label": "postgres 容器", "sublabel": "PostgreSQL 17 + 数据卷", "pos": [370, 620], "size": [230, 84], "tag": "必须" },
+    { "id": "mail", "type": "external", "label": "邮件服务", "sublabel": "Resend 或 SMTP", "pos": [720, 430], "size": [220, 74] },
+    { "id": "github", "type": "external", "label": "GitHub App", "sublabel": "Webhook + PR 关联", "pos": [720, 620], "size": [220, 74] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Docker Compose / Kubernetes（Helm chart）", "wraps": ["proxy", "frontend", "backend", "postgres"] },
+    { "kind": "region", "label": "可选的外部服务", "wraps": ["mail", "github"] }
+  ],
+  "connections": [
+    { "id": "browser-proxy", "from": "browser", "to": "proxy", "label": "HTTPS", "variant": "emphasis", "labelDy": 24 },
+    { "id": "proxy-frontend", "from": "proxy", "to": "frontend", "label": "转发到 :3000", "variant": "emphasis", "labelDy": 24 },
+    { "id": "frontend-backend", "from": "frontend", "to": "backend", "label": "代理 /api 与 /ws", "variant": "emphasis" },
+    { "id": "backend-postgres", "from": "backend", "to": "postgres", "label": "DATABASE_URL", "variant": "emphasis", "labelDy": 24 },
+    { "id": "backend-mail", "from": "backend", "to": "mail", "label": "验证码与邀请邮件" },
+    { "id": "backend-github", "from": "backend", "to": "github", "label": "Webhook / App 认证" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "三步起服务", "items": ["make selfhost 会从 .env.example 生成 .env 并随机 JWT_SECRET 与数据库密码", "拉取 postgres + backend + frontend 三个容器并等待就绪", "访问 http://localhost:3000，用 /readyz 检查 db 与 migrations"] },
+    { "dot": "emerald", "title": "生产必须配的环境变量", "items": ["DATABASE_URL、JWT_SECRET、APP_ENV=production", "FRONTEND_ORIGIN、MULTICA_APP_URL、MULTICA_PUBLIC_URL", "一种邮件投递方式：Resend 或 SMTP"] },
+    { "dot": "amber", "title": "两个容易踩的点", "items": ["backend 启动前会先跑 migrate up，迁移失败容器直接退出", "自托管会每天上报一次匿名部署快照，设 DO_NOT_TRACK=1 可关闭"] }
+  ]
+}

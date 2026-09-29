@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Run（实现层称 task）生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "happy-path", "label": "主链路", "focus": ["deferred", "queued", "dispatched", "running", "completed"], "note": "排期 → 入队 → 领取 → 执行 → 结束，这是 Run 的正常一生。" },
+      { "id": "failure-paths", "label": "失败与重试", "focus": ["running", "failed", "queued"], "note": "失败先可自动重试，重试预算用尽才真的停下。" },
+      { "id": "cancel-path", "label": "取消是人的决定", "focus": ["dispatched", "cancelled"], "note": "取消不可逆，与失败是两条不同的终态。" }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "主链路" },
+    { "id": "terminal", "label": "终态" }
+  ],
+  "states": [
+    { "id": "deferred", "type": "start", "label": "已排期", "sublabel": "deferred", "lane": "main", "col": 0, "step": "01" },
+    { "id": "queued", "type": "active", "label": "已入队", "sublabel": "queued", "lane": "main", "col": 1, "step": "02" },
+    { "id": "dispatched", "type": "active", "label": "已领取", "sublabel": "dispatched", "lane": "main", "col": 2, "step": "03" },
+    { "id": "running", "type": "active", "label": "执行中", "sublabel": "running", "lane": "main", "col": 3, "step": "04" },
+    { "id": "completed", "type": "success", "label": "已结束", "sublabel": "completed", "lane": "main", "col": 4, "step": "05" },
+    { "id": "failed", "type": "failure", "label": "失败", "sublabel": "failed", "lane": "terminal", "col": 1, "tag": "可重试" },
+    { "id": "cancelled", "type": "failure", "label": "已取消", "sublabel": "cancelled", "lane": "terminal", "col": 0, "tag": "不可逆" }
+  ],
+  "transitions": [
+    { "id": "t1", "from": "deferred", "to": "queued", "label": "到时触发", "variant": "emphasis", "labelDy": 55 },
+    { "id": "t2", "from": "queued", "to": "dispatched", "label": "运行时领取", "variant": "emphasis", "labelDy": 55, "labelDx": -60 },
+    { "id": "t3", "from": "dispatched", "to": "running", "label": "启动工具", "variant": "emphasis", "labelDy": 55 },
+    { "id": "t4", "from": "running", "to": "completed", "label": "正常退出", "variant": "emphasis", "labelDy": 55 },
+    { "id": "t5", "from": "running", "to": "failed", "label": "报错 / 超时", "variant": "security", "route": "straight", "labelDy": 24 },
+    { "id": "t6", "from": "failed", "to": "queued", "label": "自动重试", "variant": "emphasis", "route": "bottom-channel" },
+    { "id": "t7", "from": "dispatched", "to": "cancelled", "label": "人工取消", "variant": "security", "route": "straight", "labelDy": 24 }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "三件事必须分清", "items": ["deferred 是已排期，queued 是已入队，两者都不是失败", "dispatched 停留超过 5 分钟会被判失败，running 没有固定上限", "completed 只代表 Run 结束，不代表工作被接受，评审仍然是人的事"] },
+    { "dot": "amber", "title": "两个容易误判的等待", "items": ["waiting_local_directory 只在 in_place 模式出现，切 worktree 即无队列", "queued 要同时满足运行时心跳缺席超宽限期，且自己也排满这么久才判失败", "宽限期由 MULTICA_RUNTIME_RECONNECT_GRACE 控制，默认 3 小时"] },
+    { "dot": "rose", "title": "重试与终态", "items": ["普通运行默认最多 2 次尝试，工具网络中断最多 3 次", "鉴权、额度、模型配置类错误不自动重试", "手动 rerun 交给当时负责的那个智能体，而不是重新选人"] }
+  ]
+}

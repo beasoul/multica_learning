@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0005 · Run 的状态机 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 5 课 / 共 14 课</p>
+<p class="kicker">Lesson 05</p>
+<h1>Run 的状态机：八个状态，一条主线</h1>
+<p class="deck">你在界面上看到的每一个进度指示、每一条"任务卡住了"的抱怨，本质都是在问同一个问题：这条 Run 现在处于哪个状态？这一课把状态机钉死——它是后面 daemon、时序、排查三课的共同地基。</p>
+<div class="meta">
+  <span>约 35 分钟</span>
+  <span>对应图表：03 Run 生命周期</span>
+  <span>对应源码：server/pkg/protocol/events.go · pkg/db/queries/agent.sql · internal/service/task.go</span>
+</div>
+
+<h2>一、状态定义就在事件的注释里</h2>
+
+<p>Multica 有一份效率极高的"源码即文档"：<code>server/pkg/protocol/events.go</code>。每条 Run 事件后面的注释，直接写明了它对应的状态转移。原文照抄：</p>
+
+<pre><code>EventTaskQueued                = "task:queued"                  // ∅ → queued (enqueue / retry create)
+EventTaskDispatch              = "task:dispatch"                // queued → dispatched (daemon claim)
+EventTaskRunning               = "task:running"                 // dispatched → running (daemon started)
+EventTaskWaitingLocalDirectory = "task:waiting_local_directory" // dispatched → waiting_local_directory
+EventTaskProgress              = "task:progress"
+EventTaskCompleted             = "task:completed"               // running → completed
+EventTaskFailed                = "task:failed"                  // running → failed
+EventTaskCancelled             = "task:cancelled"               // * → cancelled</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><strong>每一个状态转移都对应一条实时事件。</strong>前端不需要轮询，它订阅的是"状态变了"这件事本身。这也意味着：如果你在界面上看到状态没变，服务端八成也没变——问题在上游，不在展示层。</p>
+</div>
+
+<h2>二、八个状态各是什么</h2>
+
+<table>
+  <thead><tr><th>状态</th><th>含义</th><th>谁把它推到下一个状态</th></tr></thead>
+  <tbody>
+    <tr><td>（不存在）</td><td>指派动作发生但还没入库</td><td>服务端创建记录 → <code>deferred</code> 或 <code>queued</code></td></tr>
+    <tr><td><code>deferred</code></td><td><strong>已建但未到点</strong>：带了 <code>fire_at</code> 的定时唤醒任务，时间没到之前完全不动</td><td>调度器到点后 → <code>queued</code></td></tr>
+    <tr><td><code>queued</code></td><td>在队列里等一个能干的 Runtime 来认领</td><td>daemon 认领 → <code>dispatched</code></td></tr>
+    <tr><td><code>dispatched</code></td><td>已被某台机器的 daemon 认领，凭据已签发</td><td>daemon 启动 CLI → <code>running</code>；或目录被占 → <code>waiting_local_directory</code></td></tr>
+    <tr><td><code>waiting_local_directory</code></td><td><strong>挂起等目录</strong>：要用的本地目录正被另一条 Run 占着</td><td>目录释放后 → <code>running</code></td></tr>
+    <tr><td><code>running</code></td><td>Agent CLI 进程已经在跑</td><td>CLI 结束 → <code>completed</code> / <code>failed</code></td></tr>
+    <tr><td><code>completed</code></td><td>终态：正常结束，交回评审</td><td>—</td></tr>
+    <tr><td><code>failed</code></td><td>终态：出错结束，带错误信息</td><td>—</td></tr>
+    <tr><td><code>cancelled</code></td><td>终态：被人或系统取消（<strong>任何状态都能到这里</strong>）</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<p>创建时怎么决定是 <code>deferred</code> 还是 <code>queued</code>？源码里的写法非常直白：</p>
+
+<pre><code>CASE WHEN fire_at IS NOT NULL THEN 'deferred' ELSE 'queued' END</code></pre>
+
+<p>（<code>server/pkg/db/queries/agent.sql</code>）——<strong>有定时点就排期，没有就直接入队</strong>。一句话解释了两个状态的差别。</p>
+
+<h2>三、主线与两条岔路</h2>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>03 Run 生命周期</strong>——主线上从入队到终态；两条岔路分别指向"定时排期"和"等本地目录"。注意 <code>cancelled</code> 的箭头是从<em>所有</em>状态汇过来的。</p>
+  <p class="open"><a href="../diagrams/03-run-lifecycle.html">打开生命周期图 →</a></p>
+</div>
+
+<pre><code>                 ┌─ deferred ──(到点)──┐
+   指派 ─────────┤                      ├──→ queued
+                 └────(立即入队)────────┘         │
+                                                 │ daemon 认领
+                                                 ▼
+                                            dispatched ──(目录被占)──→ waiting_local_directory
+                                                 │                            │
+                                                 │ daemon 启动 CLI            │ 目录释放
+                                                 ▼                            │
+                                              running ◄───────────────────────┘
+                                                 │
+                                    ┌────────────┼────────────┐
+                                    ▼            ▼            ▼
+                               completed      failed      cancelled
+                                                        （可从任意状态进入）</code></pre>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p><code>DBMS_SCHEDULER</code> 的 job 也有 <code>SCHEDULED</code> / <code>RUNNING</code> / <code>COMPLETED</code> / <code>FAILED</code>，并且一次 job run 是一个独立实例，有自己的状态与日志。Multica 的 Run 基本就是这个模型。</p>
+<p><code>deferred</code> 对应你给 job 设了一个未来的 <code>start_date</code>——已建成、已登记，但还没到该跑的时候。</p>
+</div>
+
+<h2>四、为什么多出这两个"怪"状态</h2>
+
+<p>一个普通的任务队列只需要 <code>queued / running / done</code>。Multica 多出 <code>waiting_local_directory</code> 和 <code>deferred</code>，恰好暴露了它和普通队列的本质差别：</p>
+
+<h3>1. <code>waiting_local_directory</code>：因为"机器"是一等公民</h3>
+
+<p>Agent 不是跑在无状态的容器里，而是跑在<strong>你机器上的某个真实目录</strong>。同一个目录不能同时被两个 Agent 改。源码对它的描述只有一句：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>dispatched → waiting_local_directory (daemon parked on a busy local_directory path)</code>——daemon 因为目标本地目录被占用而"停车"等待。</p>
+</div>
+
+<p>于是 daemon 报的状态不是"失败"，而是"我在等"。这是一个只有把"本地环境"纳入调度才会出现的状态。</p>
+
+<h3>2. <code>deferred</code>：因为触发方式不止"立刻"</h3>
+
+<p>Issue 可以被定时唤醒（wakeup）、被 webhook 触发、被 Autopilot 排期。这些情况下 Run 会先建成一条带 <code>fire_at</code> 的 <code>deferred</code> 记录——<strong>先占位，到点才排进队列</strong>。这样做的好处是：你提前就能在界面上看到"它会在明天 9 点跑"。</p>
+
+<h2>五、谁有权改状态</h2>
+
+<p>这一点非常重要，它解释了整个系统的信任模型：<strong>只有服务端写数据库</strong>。daemon 是通过一组固定 HTTP 接口"请求"服务端改状态，而不是自己连库。</p>
+
+<table>
+  <thead><tr><th>daemon 调用</th><th>服务端动作</th></tr></thead>
+  <tbody>
+    <tr><td><code>POST /api/daemon/tasks/claim</code></td><td><code>queued → dispatched</code>，并签发运行令牌</td></tr>
+    <tr><td><code>POST /api/daemon/tasks/{taskId}/start</code></td><td><code>dispatched → running</code></td></tr>
+    <tr><td><code>POST /api/daemon/tasks/{taskId}/wait-local-directory</code></td><td><code>dispatched → waiting_local_directory</code></td></tr>
+    <tr><td><code>POST /api/daemon/tasks/{taskId}/progress</code></td><td>记进度（不改状态）</td></tr>
+    <tr><td><code>POST /api/daemon/tasks/{taskId}/complete</code></td><td><code>running → completed</code></td></tr>
+    <tr><td><code>POST /api/daemon/tasks/{taskId}/fail</code></td><td><code>running → failed</code></td></tr>
+    <tr><td><code>GET /api/daemon/tasks/{taskId}/status</code></td><td>只读：daemon 用它确认"我这条还在吗"</td></tr>
+  </tbody>
+</table>
+
+<p>全部在 <code>router.go</code> 的 <code>r.Route("/api/daemon", ...)</code> 分组里，统一挂 <code>middleware.DaemonAuth</code>——普通用户令牌根本进不了这个分组。</p>
+
+<h2>六、把状态机用起来：三个典型故障</h2>
+
+<table>
+  <thead><tr><th>现象</th><th>停在哪个状态</th><th>最可能的原因（第 14 课会展开）</th></tr></thead>
+  <tbody>
+    <tr><td>点了指派，一直不动</td><td><code>queued</code></td><td>没有可用的 Runtime 来认领：daemon 没起、或 Agent 的 provider 在本机没装</td></tr>
+    <tr><td>"开始"很久了但没产出</td><td><code>dispatched</code></td><td>daemon 认领后崩了 / 网络断了，没走到 <code>start</code></td></tr>
+    <tr><td>进度条一直转圈</td><td><code>waiting_local_directory</code></td><td>同一个本地目录被另一条 Run 占着；等它结束就会自动继续</td></tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p><strong>别把"卡住"和"失败"混在一起。</strong>这三个现象里没有一个是 <code>failed</code>。真正失败会自动带着错误信息进终态。停在非终态，说明流程还没走完，只是卡在某一环——这两类问题的排查路径完全不同。</p>
+</div>
+
+<h2>七、检索练习</h2>
+
+<div class="quiz" data-answer="d"
+     data-yes="对。目录被占用会停在 waiting_local_directory，目录释放后自动继续，不算失败。"
+     data-no="回想那个「停车等目录」的状态：它不是失败，是等待。">
+  <p class="q">1. 一条 Run 停在 <code>waiting_local_directory</code>，最准确的描述是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">它失败了，需要人工点重试才会重新排队</button>
+    <button class="opt" data-key="b">它已经完成，只是界面状态没来得及刷新</button>
+    <button class="opt" data-key="c">它被取消了，等待被回收成终态记录</button>
+    <button class="opt" data-key="d">它在等目标本地目录被释放，释放后会自动进入运行</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="正确。deferred 就是有 fire_at 的排期任务，到点才进队列。"
+     data-no="回想那条 CASE 表达式：有 fire_at 就是 deferred，否则 queued。">
+  <p class="q">2. 一条 Run 处于 <code>deferred</code>，你应当理解成？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">它已被认领，但 daemon 决定推迟执行以错峰</button>
+    <button class="opt" data-key="b">它已建好并排期，但还没到 fire_at 指定的时间</button>
+    <button class="opt" data-key="c">它的执行被系统降级了，需要管理员手动提升优先级</button>
+    <button class="opt" data-key="d">它在等待某个前置 Issue 完成，属于依赖阻塞</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。写库只发生在服务端，daemon 只能通过固定接口请求改状态。"
+     data-no="想想谁连着数据库：daemon 在本机，它连不上服务端的库。">
+  <p class="q">3. 为什么 daemon 不直接连数据库改 Run 的状态？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">服务端是唯一写库方，daemon 只能通过受限接口请求状态转移</button>
+    <button class="opt" data-key="b">因为 PostgreSQL 的连接数有限，留给人类客户端更划算</button>
+    <button class="opt" data-key="c">因为服务端与 daemon 部署在不同云厂商，网络不通</button>
+    <button class="opt" data-key="d">因为 daemon 用的是只读令牌，数据库层面已限制写权限</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上面的图，凭记忆写出从"指派"到"终态"的主线状态顺序，并指出哪两个状态是分叉。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <p>主线：</p>
+    <pre><code>queued → dispatched → running → completed / failed
+（cancelled 可从任意状态进入）</code></pre>
+    <p>两个分叉：</p>
+    <ul>
+      <li><strong>入口分叉</strong>：创建时若有 <code>fire_at</code> 则是 <code>deferred</code>，到点才转 <code>queued</code>；否则直接 <code>queued</code>。</li>
+      <li><strong>出口分叉</strong>：<code>dispatched</code> 之后，如果目标本地目录被占用，先转 <code>waiting_local_directory</code>，目录释放后再转 <code>running</code>。</li>
+    </ul>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/pkg/protocol/events.go</code>——只读 <code>task:*</code> 那几行注释就够了，它是状态机的权威定义。</p>
+  <p>辅助：<code>server/pkg/db/queries/agent.sql</code>（搜 <code>fire_at</code> 与 <code>deferred</code>，看创建与取消逻辑）；<code>apps/docs/content/docs/tasks.zh.mdx</code>（产品视角的 Run 说明）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："<code>task:progress</code> 为什么不改状态？"——因为它上报的是<em>过程</em>，不是<em>阶段</em>。阶段由 daemon 明确的 start/complete/fail 决定，进度只是附带数据。这个区分在第 6 课的时序图里会很直观。</p>
+
+<div class="lesson-nav">
+  <a href="0004-backend-request-path.html">← 0004 · 一个请求的旅行</a>
+  <a href="0006-run-sequence.html">0006 · 一次 Run 的端到端时序 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "实时事件数据流：两条 WebSocket 通道",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 640],
+    "views": [
+      { "id": "write-path", "label": "写入与落库", "focus": ["webWrite", "daemonReport", "service", "pg"], "note": "所有变更先落 PostgreSQL，事件是落库之后的产物。" },
+      { "id": "fan-out", "label": "事件如何扩散", "focus": ["service", "bus", "redis"], "note": "单实例走进程内总线，多副本时用 Redis Streams 中继。" },
+      { "id": "consumers", "label": "两个不同的消费者", "focus": ["daemonws", "realtime", "daemonLoop", "uiCache"], "note": "人类客户端收到的是缓存失效信号，daemon 收到的是「有活可干」。" }
+    ]
+  },
+  "stages": [
+    { "label": "写入口" },
+    { "label": "服务端处理与落库" },
+    { "label": "事件总线" },
+    { "label": "WebSocket 连接层" },
+    { "label": "消费者" }
+  ],
+  "nodes": [
+    { "id": "webWrite", "type": "frontend", "label": "浏览器写请求", "sublabel": "POST /api/...", "stage": 0, "row": 0, "width": 118 },
+    { "id": "daemonReport", "type": "backend", "label": "daemon 上报", "sublabel": "进度 / 完成 / usage", "stage": 0, "row": 1, "width": 118 },
+    { "id": "service", "type": "backend", "label": "handler + service", "sublabel": "校验、事务、用量", "stage": 1, "row": 0, "width": 138 },
+    { "id": "pg", "type": "database", "label": "PostgreSQL", "sublabel": "唯一权威状态", "stage": 1, "row": 1, "width": 130 },
+    { "id": "bus", "type": "messagebus", "label": "进程内事件总线", "sublabel": "internal/events", "stage": 2, "row": 0, "width": 138 },
+    { "id": "redis", "type": "messagebus", "label": "Redis Streams", "sublabel": "多副本才需要", "stage": 2, "row": 1, "width": 130, "tag": "可选" },
+    { "id": "daemonws", "type": "backend", "label": "daemonws hub", "sublabel": "GET /api/daemon/ws", "stage": 3, "row": 0, "width": 150 },
+    { "id": "realtime", "type": "backend", "label": "realtime hub", "sublabel": "GET /ws", "stage": 3, "row": 1, "width": 118 },
+    { "id": "daemonLoop", "type": "backend", "label": "daemon 领取循环", "sublabel": "WS 通知或轮询", "stage": 4, "row": 0, "width": 148 },
+    { "id": "uiCache", "type": "frontend", "label": "客户端 Query cache", "sublabel": "invalidate / setQueryData", "stage": 4, "row": 1, "width": 168 }
+  ],
+  "flows": [
+    { "id": "f1", "from": "webWrite", "to": "service", "label": "写请求", "variant": "emphasis", "route": "straight" },
+    { "id": "f2", "from": "daemonReport", "to": "service", "label": "执行上报" },
+    { "id": "f3", "from": "service", "to": "pg", "label": "事务写入", "labelDy": 24 },
+    { "id": "f4", "from": "service", "to": "bus", "label": "发布领域事件", "variant": "emphasis", "labelDy": 24 },
+    { "id": "f5", "from": "bus", "to": "redis", "label": "跨副本中继", "variant": "dashed", "labelDy": 24 },
+    { "id": "f6", "from": "bus", "to": "daemonws", "label": "通知任务可用", "variant": "emphasis" },
+    { "id": "f7", "from": "redis", "to": "realtime", "label": "订阅并转投", "variant": "dashed" },
+    { "id": "f8", "from": "daemonws", "to": "daemonLoop", "label": "唤醒领取", "variant": "emphasis" },
+    { "id": "f9", "from": "realtime", "to": "uiCache", "label": "WS 事件" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "两条通道，两种作用域", "items": ["/ws 面向人类客户端，按 workspace、issue、user 作用域广播", "/api/daemon/ws 面向 daemon，按 runtime 定向投递并承载 RPC", "两者都复用同一个 realtime 中继来做跨副本投递"] },
+    { "dot": "emerald", "title": "WebSocket 只是加速器", "items": ["数据库仍是最终状态，事件丢了不会丢数据", "客户端重连后必须重新查询来校准", "daemon 保留轮询路径，避免一次断连让 queued 永久停住"] },
+    { "dot": "amber", "title": "事件如何落到界面上", "items": ["事件进来后只做两件事：invalidateQueries 或 setQueryData", "服务端对象不会复制进 Zustand，避免两份状态打架", "执行日志靠 task:progress 实时追加"] }
+  ]
+}

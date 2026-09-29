@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "daemon 唤醒与领取 Run 的流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "happy-path", "label": "主路径", "focus": ["trigger", "enqueue", "notify", "claim", "prepare", "spawn"], "note": "从触发到工具进程启动，只有六个动作。" },
+      { "id": "two-wake-paths", "label": "两条唤醒路径", "focus": ["notify", "heartbeat", "claim"], "note": "WebSocket 负责低延迟，轮询负责不让任务永久卡住。" },
+      { "id": "offline-branch", "label": "机器不在线时", "focus": ["enqueue", "notify", "offline"], "note": "运行时长时间不回来，queued 才会被判失败。" }
+    ]
+  },
+  "lanes": [
+    { "id": "triggers", "label": "触发源" },
+    { "id": "server", "label": "服务端（Go API）" },
+    { "id": "daemon", "label": "本机 Agent daemon" },
+    { "id": "tools", "label": "工具进程" },
+    { "id": "exceptions", "label": "异常分支", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "p-trigger", "label": "触发与入队", "fromCol": 0, "toCol": 1 },
+    { "id": "p-dispatch", "label": "派发与领取", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "p-execute", "label": "准备与执行", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "g-wake", "label": "两条唤醒路径", "lane": "daemon", "fromCol": 2, "toCol": 3 }
+  ],
+  "mainPath": ["trigger", "enqueue", "notify", "claim", "prepare", "spawn"],
+  "nodes": [
+    { "id": "trigger", "lane": "triggers", "col": 0, "type": "external", "label": "三种触发方式", "sublabel": "指派 · 提及 · 自动化" },
+    { "id": "enqueue", "lane": "server", "col": 1, "type": "backend", "label": "Run 入队", "sublabel": "TaskService 写入 queued" },
+    { "id": "notify", "lane": "server", "col": 2, "type": "messagebus", "label": "通知运行时", "sublabel": "daemon WebSocket" },
+    { "id": "claim", "lane": "daemon", "col": 3, "type": "backend", "label": "领取 task", "sublabel": "WS 优先，HTTP 兜底" },
+    { "id": "prepare", "lane": "daemon", "col": 4, "type": "backend", "label": "准备目录", "sublabel": "写入 skill 与临时凭据" },
+    { "id": "spawn", "lane": "tools", "col": 5, "type": "external", "label": "spawn 工具进程", "sublabel": "注入 MULTICA_TASK_ID" },
+    { "id": "heartbeat", "lane": "daemon", "col": 2, "type": "backend", "label": "心跳 + 轮询", "sublabel": "默认 15 秒一次" },
+    { "id": "offline", "lane": "exceptions", "col": 2, "type": "security", "label": "queued 判失败", "sublabel": "runtime_offline", "tag": "宽限期默认 3h" }
+  ],
+  "edges": [
+    { "id": "e1", "from": "trigger", "to": "enqueue", "label": "创建 Run", "variant": "emphasis", "role": "main" },
+    { "id": "e2", "from": "enqueue", "to": "notify", "label": "通知目标运行时", "role": "main" },
+    { "id": "e3", "from": "notify", "to": "claim", "label": "WS 唤醒（首选）", "variant": "emphasis", "role": "main" },
+    { "id": "e4", "from": "claim", "to": "prepare", "label": "领取成功", "role": "main" },
+    { "id": "e5", "from": "prepare", "to": "spawn", "label": "环境就绪", "variant": "emphasis", "role": "main" },
+    { "id": "e6", "from": "heartbeat", "to": "claim", "label": "轮询兜底", "variant": "dashed", "role": "async" },
+    { "id": "e7", "from": "notify", "to": "offline", "label": "机器持续不在线", "variant": "security", "role": "error" },
+    { "id": "e8", "from": "spawn", "to": "prepare", "label": "流式事件回传", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "唤醒有三个来源", "items": ["daemon WS 通知（延迟最低，首选）", "固定间隔轮询（WS 断开时的兜底）", "运行时集合变化时的即时 nudge"] },
+    { "dot": "emerald", "title": "领取是批量的", "items": ["daemon 按批次领取任务，而不是一条一条要", "同一台机器上的并发上限取「智能体并发」与「daemon 全局容量」的较小值", "领取时服务端才签发绑定这一次 Run 的临时凭据"] },
+    { "dot": "rose", "title": "什么时候才算真的失败", "items": ["queued 必须同时满足运行时心跳缺席超宽限期、且自己也等了这么久", "dispatched 停留超过 5 分钟判失败，running 没有固定上限", "鉴权、额度、模型配置类错误不自动重试"] }
+  ]
+}

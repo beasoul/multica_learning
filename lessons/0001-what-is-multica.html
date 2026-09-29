@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0001 · 先看清全貌 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 1 课 / 共 14 课</p>
+<p class="kicker">Lesson 01</p>
+<h1>先看清全貌：它到底解决了什么问题</h1>
+<p class="deck">这门课的终点不是"看懂 README"，而是你能把它改成自己要的样子。第一课只做一件事：把 Multica 的名字、定位和那个关键的架构取舍说清楚。</p>
+<div class="meta">
+  <span>约 25 分钟</span>
+  <span>对应图表：01 系统架构总览</span>
+  <span>对应源码：README.md · VISION.md · developers/architecture.zh.mdx</span>
+</div>
+
+<h2>一、名字里藏着定位</h2>
+
+<p>Multica = <strong>Mult</strong>iplexed <strong>I</strong>nformation and <strong>C</strong>omputing <strong>A</strong>gent。名字取自 1960 年代的 Multics 操作系统——那个第一次把"分时"概念带进计算机的系统，让多个人共用一台机器，各自感觉像独占一台。</p>
+
+<p>为什么拿这个当名字？因为 Multica 想解决的是同一类问题，只是"共用的用户"变了：</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>你现在的开发状态大概是：3 个终端标签页分别跑着 Claude Code、Codex、还有一个别的 Agent。每个窗口都记不住上一次聊了什么，你每天要第四次解释同一段背景。加得越多，你花在"盯梢"和"复述"上的时间越多。</p>
+<p>Multica 的说法是：把这些 Agent 和你自己放进<strong>同一个工作台</strong>，用派活给同事的方式派活给 Agent。它自称是<strong>开源的 Managed Agents 平台</strong>。</p>
+</div>
+
+<h2>二、它不做什么，比它做什么更重要</h2>
+
+<p>这句话是理解整个架构的钥匙：</p>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><strong>Multica 不提供模型，也不直接执行代码。</strong>它驱动你机器上<em>已经装好并登录</em>的编码 Agent CLI（README 里列了 26 种：<code>claude</code>、<code>codex</code>、<code>cursor-agent</code>、<code>copilot</code>、<code>opencode</code>、<code>kimi</code>、<code>grok</code>、<code>qwen</code>…… 完整清单在 <code>scripts/agent-cli-command-names.txt</code>）。</p>
+<p>换 provider 是下拉框的事，不是一次迁移。</p>
+</div>
+
+<p>把它拆成三层看就清楚了：</p>
+
+<table>
+  <thead><tr><th>层次</th><th>归谁管</th><th>产物</th></tr></thead>
+  <tbody>
+    <tr><td>协作数据（谁派了什么活、进度如何、花了多少钱）</td><td>Multica 的 Go 服务端 + PostgreSQL</td><td>Issue、Run 记录、执行日志、用量</td></tr>
+    <tr><td>执行调度（什么时候唤醒哪台机器、给什么凭据）</td><td>Multica 的服务端 + 你机器上的 daemon</td><td>一条条 <code>queued → running</code> 的任务</td></tr>
+    <tr><td>真正干活</td><td><strong>你已有的 Agent CLI</strong></td><td>代码改动、命令执行、PR</td></tr>
+  </tbody>
+</table>
+
+<p>所以你在架构图里会看到一条很别扭的线：客户端 → Go 服务端 → daemon → Agent CLI。<strong>服务端从不下场执行</strong>，它只负责"派活、记账、发凭据"。</p>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>01 系统架构总览</strong>——四种客户端、一台服务端、你自己机器上的 daemon 与工具进程。打开它，对着上面的三层表把每一块对号入座。</p>
+  <p class="open"><a href="../diagrams/01-system-architecture.html">打开架构图 →</a></p>
+</div>
+
+<h2>三、一套技术栈，三行记住</h2>
+
+<table>
+  <thead><tr><th>层</th><th>技术</th><th>在这门课里你会读到</th></tr></thead>
+  <tbody>
+    <tr><td>Web</td><td>Next.js 16（App Router）</td><td><code>apps/web/</code></td></tr>
+    <tr><td>Desktop</td><td>Electron，复用同一套 Web UI 代码</td><td><code>apps/desktop/</code></td></tr>
+    <tr><td>Mobile</td><td>Expo / React Native</td><td><code>apps/mobile/</code>（本课只了解，不深入）</td></tr>
+    <tr><td>后端</td><td>Go（Chi 路由 + sqlc + gorilla/websocket）</td><td><code>server/</code></td></tr>
+    <tr><td>数据库</td><td>PostgreSQL 17</td><td><code>server/migrations/</code>（589 组迁移文件）</td></tr>
+    <tr><td>执行</td><td>本机 daemon 驱动任意受支持的 Agent CLI</td><td><code>server/internal/daemon/</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">给你的背景</span>
+<p>你有 Oracle + Python 背景，这对读这个项目是优势而不是劣势：</p>
+<ul>
+  <li>PostgreSQL 那套迁移、索引、事务在这儿是主线，不是配菜（第 6 课专门讲）。</li>
+  <li>Go 代码里大量的 <code>service</code> / <code>repository</code> 分层，本质是你在 PL/SQL 里见过的"业务逻辑与数据访问分离"。</li>
+  <li>唯一的门槛是 Go 语法与 TypeScript 类型系统。这两样本课只讲"读懂所需的最小集"，不会变成语言教程。</li>
+</ul>
+</div>
+
+<h2>四、授权模式：一个必须知道的"坑"</h2>
+
+<p>Multica 的许可证叫 <strong>Multica License</strong>——完整的 Apache 2.0 文本<em>加上额外条件</em>，覆盖三个方面：托管服务、商业嵌入、品牌。原文在 <code>LICENSE</code>，署名要求在 <code>NOTICE</code>。</p>
+
+<p>实践含义：</p>
+<ul>
+  <li>自部署、修改、在内网给团队用 —— 可以。</li>
+  <li>把它做成对外提供的托管服务，或者嵌进你要卖的产品 —— 需要先读条款。</li>
+</ul>
+
+<p>顺带说一句它的怪异之处：<code>.gitignore</code> 里写着 <code>server/bin/</code>、<code>server/daemon</code>、<code>server/multica</code>，而仓库里确实有 <code>server/cmd/multica/</code>。这不是打错字，是同一个 Go 二进制既当 CLI 又当 daemon 的证据——第 8 课会展开。</p>
+
+<h2>五、检索练习（靠回忆作答）</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="正确。Multica 不自带模型、也不自己跑模型，它调度的是你本机已登录的 Agent CLI。"
+     data-no="不对。这个定位决定了整个架构：服务端只派活记账，执行永远发生在你自己的机器上。">
+  <p class="q">1. 关于 Multica 与"模型"的关系，下面哪句最准确？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">它内置多家模型，按需在云端切换调用</button>
+    <button class="opt" data-key="b">它只支持一家模型，但可以自部署在自己机器</button>
+    <button class="opt" data-key="c">它不含模型，负责调度你已登录的 Agent CLI 工具</button>
+    <button class="opt" data-key="d">它训练自己的模型，用你的代码库做持续微调</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。服务端只管协作数据与调度，代码始终留在本机。"
+     data-no="再想一遍那三层表：协作数据、执行调度、真正干活，分别归谁。">
+  <p class="q">2. 你的源码在哪一刻离开过自己的机器？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">在服务端生成 PR 快照时会被完整上传一次</button>
+    <button class="opt" data-key="b">不会离开，服务端只收到进度、消息与用量</button>
+    <button class="opt" data-key="c">在 Agent 首次启动时会上传一份目录索引副本</button>
+    <button class="opt" data-key="d">只有在你手动点击"分享运行记录"之后才离开</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="正确，Multica 这个名字直接来自 Multics 的分时思想。"
+     data-no="回到第一段：Multica = Multiplexed Information and Computing Agent，致敬 1960 年代的 Multics。">
+  <p class="q">3. "Multica" 这个名字致敬的是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">把代码任务并行分发到多台服务器的调度算法</button>
+    <button class="opt" data-key="b">一个允许同一账号登录多个工作区的权限设计方案</button>
+    <button class="opt" data-key="c">一种把多种编程语言统一成同一运行时的编译技术</button>
+    <button class="opt" data-key="d">1960 年代引入分时、让多人共用一台机器的操作系统</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上面的表格，写出你机器上会出现的三个进程/组件，以及各自负责什么。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>浏览器 / 桌面端</strong>（或 CLI）：你的操作入口，通过 HTTP + WebSocket 跟服务端说话。</li>
+      <li><strong>Go 服务端</strong>：保存工作区、Issue、Run 记录与用量；决定哪台机器该干活；签发运行级凭据。<em>它不执行你的代码。</em></li>
+      <li><strong>Agent daemon</strong>：跑在你机器上的 Go 进程，领取 Run、准备本地目录、spawn 你已登录的 Agent CLI，并把流式事件回传给服务端。</li>
+    </ol>
+    <p>严格说还有第四个：被 spawn 的 <strong>Agent CLI 进程</strong>本身（<code>claude</code>、<code>codex</code>……），它才是真正读你代码、改你文件的那个。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>VISION.md</code>（或中文版 <code>VISION.zh.md</code>）—— 全文不到两屏，但它解释了"为什么是分时"这个产品判断。读完再回头看你自己的日常：你到底在几个终端之间来回切？</p>
+  <p>辅助：<code>apps/docs/content/docs/developers/architecture.zh.mdx</code>（代码视角的分层表）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："Multica 和我直接用 Claude Code 的 subagent 有什么区别？"——这是个好问题，答案在 <code>README.md</code> 的 "Build the team" 一节和 <code>concepts.zh.mdx</code> 里，但我们可以先聊清楚再去看原文。</p>
+
+<div class="lesson-nav">
+  <span>← 这是第一课</span>
+  <a href="0002-domain-model.html">0002 · 领域模型：八个名词 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

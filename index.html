@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multica 精读课 · 课程目录</title>
+<link rel="stylesheet" href="assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb">C:\coding\learning · 离线课程</p>
+<p class="kicker">Course Index</p>
+<h1>Multica 精读课：从看懂到改得动</h1>
+<p class="deck">14 课，一条从"它是什么"走到"我能改它"的路线。每课一个主题、一次检索练习，全部结论都能在 <code>C:\coding\multica</code> 源码里找到出处。所有文件本地可打开，无需联网。</p>
+
+<div class="meta">
+  <span>14 课</span>
+  <span>8 张设计图</span>
+  <span>5 份速查文档</span>
+  <span>面向：Oracle + Python 背景</span>
+</div>
+
+<h2>这门课为谁写</h2>
+
+<p>写给一个想<strong>驾驭</strong> Multica 而不是只会点界面的人。目标定义在 <a href="MISSION.md">MISSION.md</a>，教学偏好与这台机器的环境坑记在 <a href="NOTES.md">NOTES.md</a>，所有引用来源清单在 <a href="RESOURCES.md">RESOURCES.md</a>。</p>
+
+<div class="callout key">
+  <span class="tag">学习方式</span>
+<p><strong>一次只吃一个主题，30-40 分钟一课。</strong>每课末尾都有需要回忆才能作答的题——不要"读一遍就往下翻"，答案自己写出来才算学会。</p>
+<p>建议顺序：<strong>0001 → 0014 顺着走</strong>。前 6 课建立主干（领域模型与 Run 链路），7-9 课是执行与实时，10-13 课按你的兴趣挑顺序，0014 收口做排查与实战。</p>
+</div>
+
+<h2>课程目录</h2>
+
+<ol class="toc">
+  <li>
+    <span class="num">01</span>
+    <span>
+      <span class="ttl"><a href="lessons/0001-what-is-multica.html">先看清全貌：它到底解决了什么问题</a></span>
+      <span class="why">名字由来、它不做什么、三层分工、授权模式。配图 01。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">02</span>
+    <span>
+      <span class="ttl"><a href="lessons/0002-domain-model.html">领域模型：先把八个名词钉死</a></span>
+      <span class="why">Workspace / Issue / Run / Agent / Runtime / Squad / Skill / Autopilot。三个最容易搞错的地方。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">03</span>
+    <span>
+      <span class="ttl"><a href="lessons/0003-repo-layers.html">仓库分层：为什么文件不能随便放</a></span>
+      <span class="why">core / ui / views 的硬边界；Go 的 cmd / internal / pkg 三分。配图 02。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">04</span>
+    <span>
+      <span class="ttl"><a href="lessons/0004-backend-request-path.html">一个 HTTP 请求的旅行：从路由到 SQL</a></span>
+      <span class="why">全局中间件链、三组路由、handler → service → sqlc。附"3 分钟定位任意接口"套路。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">05</span>
+    <span>
+      <span class="ttl"><a href="lessons/0005-run-lifecycle.html">Run 的状态机：八个状态，一条主线</a></span>
+      <span class="why">deferred / queued / dispatched / waiting_local_directory / running / 三个终态。配图 03。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">06</span>
+    <span>
+      <span class="ttl"><a href="lessons/0006-run-sequence.html">一次 Run 的端到端时序与凭据链</a></span>
+      <span class="why">四种令牌如何逐级收窄；注入给 Agent 的环境变量。配图 04。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">07</span>
+    <span>
+      <span class="ttl"><a href="lessons/0007-daemon.html">daemon：那台真正跑活的机器</a></span>
+      <span class="why">启动序列、推 + 拉双保险、claim 的原子性、看门狗与 GC。配图 05。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">08</span>
+    <span>
+      <span class="ttl"><a href="lessons/0008-cli-and-daemon.html">CLI 与 daemon：一个二进制，两副面孔</a></span>
+      <span class="why">profile 隔离、工作区解析优先级、脚本化实战、退出码分层。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">09</span>
+    <span>
+      <span class="ttl"><a href="lessons/0009-realtime.html">实时同步：两条 WebSocket 通道</a></span>
+      <span class="why">人类通道 vs daemon 通道、事件粒度、前端 patch 与 invalidate。配图 06。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">10</span>
+    <span>
+      <span class="ttl"><a href="lessons/0010-database-migrations.html">数据库与迁移：用 Oracle 的眼睛读 PostgreSQL</a></span>
+      <span class="why">三条硬规则、CONCURRENTLY、表达式索引与统计信息、检索策略演进。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">11</span>
+    <span>
+      <span class="ttl"><a href="lessons/0011-security.html">权限与安全：把三层边界分清</a></span>
+      <span class="why">认证 / 授权 / 执行隔离；官方对"不做沙箱"的完整说明。配图 08。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">12</span>
+    <span>
+      <span class="ttl"><a href="lessons/0012-selfhost.html">跑起来：自部署与本地开发两条路</a></span>
+      <span class="why">make selfhost 与 make setup/start/check/down；worktree 隔离；健康检查。配图 07。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">13</span>
+    <span>
+      <span class="ttl"><a href="lessons/0013-integrations-plugins.html">集成与插件：让 Multica 长出去</a></span>
+      <span class="why">集成 vs 插件；Action / Hook / Resource 三种关系；封闭的 scope 清单。</span>
+    </span>
+  </li>
+  <li>
+    <span class="num">14</span>
+    <span>
+      <span class="ttl"><a href="lessons/0014-troubleshooting.html">收官：分诊故障，然后动手改一处</a></span>
+      <span class="why">按"Run 停在哪个状态"分诊；三个梯度的改动方案；改代码的五条规矩。</span>
+    </span>
+  </li>
+</ol>
+
+<h2>八张设计图</h2>
+
+<p>每张图都是独立 HTML，可离线打开、可缩放。它们由 <code>diagrams/_src/</code> 下的 JSON 规格生成——改规格可重新渲染。</p>
+
+<table>
+  <thead><tr><th>#</th><th>图</th><th>用在</th></tr></thead>
+  <tbody>
+    <tr><td>01</td><td><a href="diagrams/01-system-architecture.html">系统架构总览</a></td><td>第 1、2 课</td></tr>
+    <tr><td>02</td><td><a href="diagrams/02-repo-layers.html">仓库分层与依赖方向</a></td><td>第 3 课</td></tr>
+    <tr><td>03</td><td><a href="diagrams/03-run-lifecycle.html">Run 生命周期</a></td><td>第 5 课</td></tr>
+    <tr><td>04</td><td><a href="diagrams/04-run-sequence.html">一次 Run 端到端时序</a></td><td>第 6 课</td></tr>
+    <tr><td>05</td><td><a href="diagrams/05-daemon-dispatch.html">daemon 唤醒与领取 Run 流程</a></td><td>第 7 课</td></tr>
+    <tr><td>06</td><td><a href="diagrams/06-realtime-dataflow.html">实时事件数据流</a></td><td>第 9 课</td></tr>
+    <tr><td>07</td><td><a href="diagrams/07-selfhost-topology.html">自部署拓扑</a></td><td>第 12 课</td></tr>
+    <tr><td>08</td><td><a href="diagrams/08-permission-chain.html">权限校验链</a></td><td>第 11 课</td></tr>
+  </tbody>
+</table>
+
+<h2>速查文档</h2>
+
+<p>把 14 课压缩成可随时翻的形态。忘了某个名词或某条命令时，先来这里，不要再从头读课。</p>
+
+<table>
+  <thead><tr><th>文档</th><th>什么时候用</th></tr></thead>
+  <tbody>
+    <tr><td><a href="reference/01-glossary.html">术语表</a></td><td>看到一个不认识的词，5 秒查证</td></tr>
+    <tr><td><a href="reference/02-code-map.html">代码地图</a></td><td>"这个功能在哪实现？"——按问题反查文件</td></tr>
+    <tr><td><a href="reference/03-run-states.html">Run 状态与失败原因</a></td><td>任务卡住或失败时对照</td></tr>
+    <tr><td><a href="reference/04-commands-env.html">命令与环境变量</a></td><td>写脚本、调 daemon 参数</td></tr>
+    <tr><td><a href="reference/05-diagram-index.html">图表索引</a></td><td>想快速找到该看哪张图</td></tr>
+  </tbody>
+</table>
+
+<h2>学习记录</h2>
+
+<p>每完成一课，往 <code>learning-records/</code> 里追加一条：学到了什么、还有什么没懂、下次想追的问题。这是让课程"越用越顺手"的机制——下次开课时先读它。</p>
+
+<div class="ask"><strong>卡住就问我。</strong>课程里的每一课都留了一句"可以这样问"。把具体报错、看到的日志、或某段读不懂的源码贴过来，比重新读一遍文档快得多。</div>
+
+</div>
+<script src="assets/course.js"></script>
+</body>
+</html>

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0007 · daemon：唤醒、领取、spawn | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 7 课 / 共 14 课</p>
+<p class="kicker">Lesson 07</p>
+<h1>daemon：那台真正跑活的机器</h1>
+<p class="deck">前面几课的"daemon"一直是个黑盒。这一课把它拆开：它怎么启动、怎么知道有活、怎么抢到活、怎么把 Agent 拉起来、以及它如何防止"任务永远卡在 running"。</p>
+<div class="meta">
+  <span>约 40 分钟</span>
+  <span>对应图表：05 daemon 唤醒与领取 Run 流程</span>
+  <span>对应源码：server/internal/daemon/{daemon,config,client}.go · internal/handler/daemon.go</span>
+</div>
+
+<h2>一、它只做三件事</h2>
+
+<table>
+  <thead><tr><th>职责</th><th>具体动作</th></tr></thead>
+  <tbody>
+    <tr><td><strong>登记能力</strong></td><td>扫描本机装了哪些受支持的 CLI，把每个"机器 + provider"注册成一个 Runtime 上报服务端</td></tr>
+    <tr><td><strong>领取任务</strong></td><td>等通知 + 定时轮询；抢到一条 Run 就准备好目录和凭据</td></tr>
+    <tr><td><strong>执行并汇报</strong></td><td>spawn CLI 进程，把进度/消息/用量回传，最后报完成或失败</td></tr>
+  </tbody>
+</table>
+
+<p>记住一点：<strong>daemon 不写数据库</strong>（第 5 课），也<strong>不碰模型</strong>（第 1 课）。它是个"本机执行代理"。</p>
+
+<h2>二、启动序列</h2>
+
+<p>源码 <code>daemon.go</code> 的 <code>Run()</code> 方法就是启动全流程，顺序有讲究：</p>
+
+<pre><code>1. 先绑健康检查端口（默认 19514）
+   └─ 端口起不来，说明本机已经有一个 daemon 在跑 → 立即退出，不打架
+2. 加载配置（令牌从 CLI 配置里读）
+3. 续期 PAT → 初始工作区同步
+   └─ 这一步要 exec 每个已配置的 agent 拿版本号；冷缓存时约 20 秒
+4. 注册 Runtime
+5. 开始服务：健康检查 + 心跳 + 轮询/WebSocket 领取循环</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><code>/health</code> 的<strong>存活（liveness）</strong>和<strong>就绪（readiness）</strong>是分开报的：端口在第 1 步就起来了（所以 <code>daemon start</code> 不会一直 connection refused），但状态保持 <code>"starting"</code>，直到第 3 步完成才转 <code>"running"</code>。</p>
+<p>这个设计防止"preflight 慢或失败"被误报成"daemon 已启动、准备就绪"。</p>
+</div>
+
+<h2>三、两条拿活的路：通知 + 轮询</h2>
+
+<p>daemon 怎么知道"有活了"？两条路并行，缺一不可：</p>
+
+<table>
+  <thead><tr><th>路径</th><th>机制</th><th>默认节奏</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>推送</strong></td>
+      <td>daemon 与服务端保持一条 WebSocket（<code>/api/daemon/ws</code>），服务端发现你这个工作区有可领的任务就通知</td>
+      <td>即时</td>
+    </tr>
+    <tr>
+      <td><strong>轮询</strong></td>
+      <td>daemon 定时主动查询"有没有我能干的"</td>
+      <td><code>MULTICA_DAEMON_POLL_INTERVAL</code>=30 秒</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>还有一个更慢的兜底节奏 <code>MULTICA_DAEMON_WS_CLAIM_POLL_INTERVAL</code>=3 分钟，用于 WebSocket 明明连着但没收到通知的情况。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这就是经典的"<strong>推 + 拉</strong>双保险"。推送省延迟，轮询保正确性——因为推送会丢（网络抖动、服务端重启、进程刚好在忙别的）。</p>
+<p>和 Oracle 无关但思路一致：<code>DBMS_SCHEDULER</code> 的 job 到点由调度器主动启动（推），而你写个脚本每 30 秒查一次 <code>DBA_SCHEDULER_JOB_RUN_DETAILS</code> 看有没有结果（拉）。两个都不能少。</p>
+</div>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>05 daemon 唤醒与领取 Run 流程</strong>——从"服务端发现可领任务"到"daemon 拉起进程"，两条路径在 claim 那一步汇合。</p>
+  <p class="open"><a href="../diagrams/05-daemon-dispatch.html">打开流程图 →</a></p>
+</div>
+
+<h2>四、claim：为什么必须是"抢"</h2>
+
+<p>领取的接口是 <code>POST /api/daemon/tasks/claim</code>。关键在于：<strong>同一台机器、甚至多台机器上的多个 daemon 可能同时看到同一条 <code>queued</code> 的 Run</strong>。</p>
+
+<p>服务端用一次数据库事务把它从 <code>queued</code> 改成 <code>dispatched</code>——改成功了才是你的。这叫做"原子认领"（claim），它保证一条 Run 只会被一个 daemon 接走，不会重复执行。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>如果你在排查时看到同一条 Run 出现"两个 daemon 都以为自己在跑"的日志，那不是正常设计——正常情况下一方会拿不到 claim。这类问题要去查事务与唯一约束，而不是查 daemon。</p>
+</div>
+
+<h2>五、准备执行：目录是第一等公民</h2>
+
+<p>领到活之后，daemon 要做三件事才敢启动 Agent：</p>
+
+<ol>
+  <li><strong>解析 Agent 配置</strong>：这个 Agent 用哪个 provider、带什么参数、挂哪些 Skill。</li>
+  <li><strong>找到 CLI 可执行文件</strong>：本机该 provider 装在哪。这里有一整套"自愈"逻辑——如果路径变了、旧路径失效了，daemon 会重新探测并修正（源码里的 <code>healAgentPath</code> / <code>adoptAgentPath</code>）。</li>
+  <li><strong>准备本地工作目录</strong>：默认落在 <code>$HOME/multica_workspaces</code>，可用 <code>MULTICA_WORKSPACES_ROOT</code> 改。目录归属与任务隔离都在这层处理。</li>
+</ol>
+
+<p>第 3 步就是第 5 课那个 <code>waiting_local_directory</code> 状态的来源：<strong>同一个目录被另一条 Run 占着，daemon 就"停车"等</strong>，而不是硬上。</p>
+
+<h2>六、spawn：进程是它拉起来的</h2>
+
+<p>真正的执行是一句 spawn。daemon 把第 6 课那组环境变量塞进去：</p>
+
+<pre><code>MULTICA_TOKEN        = &lt;mat_ 一次性运行令牌&gt;
+MULTICA_TASK_ID      = &lt;这次 Run 的 ID&gt;
+MULTICA_AGENT_ID     = &lt;哪个 Agent&gt;
+MULTICA_WORKSPACE_ID = &lt;哪个工作区&gt;
+MULTICA_TASK_SLOT    = &lt;并发槽位号&gt;
+MULTICA_SERVER_URL / MULTICA_DAEMON_PORT / TMPDIR ...</code></pre>
+
+<p><code>MULTICA_TASK_SLOT</code> 是并发槽位。默认一台机器的并发上限是 <code>MULTICA_DAEMON_MAX_CONCURRENT_TASKS</code>=<strong>20</strong>——所以你会看到同一个 Agent 配置在界面上出现多个并行实例。</p>
+
+<h2>七、看门狗：防止"永远 running"</h2>
+
+<p>Agent CLI 是外部程序，它可能挂住、可能沉默、可能死循环。<strong>如果 daemon 不管，那条 Run 会永远停在 <code>running</code>。</strong>于是有了一组看门狗：</p>
+
+<table>
+  <thead><tr><th>看门狗</th><th>默认值</th><th>管什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_DAEMON_HEARTBEAT_INTERVAL</code></td><td>15 秒</td><td>定期告诉服务端"我还活着"；服务端据此判断 Runtime 是否在线</td></tr>
+    <tr><td><code>MULTICA_AGENT_IDLE_WATCHDOG</code></td><td>2 小时</td><td>长时间没有任何活动的任务，判定为卡死并收敛掉</td></tr>
+    <tr><td><code>MULTICA_AGENT_TIMEOUT</code></td><td>0（不限）</td><td>整条任务的硬超时；默认不限，因为编码任务可能很长</td></tr>
+    <tr><td><code>MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT</code></td><td>10 分钟</td><td>针对 Codex 这种自带定时器的 CLI 的"语义不活跃"判定</td></tr>
+    <tr><td><code>MULTICA_OPENCODE_IDLE_WATCHDOG</code></td><td>10 分钟</td><td>OpenCode 的专属空闲判定</td></tr>
+  </tbody>
+</table>
+
+<p>注意最后一列的分化：<strong>每个 provider 的超时策略可以不同</strong>，因为它们自己的行为模式不同。这就是"适配层"存在的理由（第 8 课会把 <code>pkg/agent</code> 拆开看）。</p>
+
+<h2>八、它还在后台自己维护什么</h2>
+
+<table>
+  <thead><tr><th>作业</th><th>节奏</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td>工作区同步</td><td>首次 30 秒，常规 30 分钟</td><td>把本机有哪些 agent、哪些仓库同步到服务端</td></tr>
+    <tr><td>垃圾回收</td><td>每 2 小时</td><td>清理任务工作目录（默认 TTL 24 小时）、孤儿目录（72 小时）、可再生的构建产物（<code>node_modules</code>、<code>.next</code>、<code>.turbo</code>）</td></tr>
+    <tr><td>自动更新检查</td><td>每 6 小时</td><td>向 GitHub 查有没有新版本 CLI</td></tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>GC 只清<strong>工作副本</strong>，不动你的源码仓库。但它确实会删任务工作目录——<strong>不要把重要产物只放在 Multica 的工作目录里</strong>，该提交的提交，该回传的回传。</p>
+</div>
+
+<h2>九、你手上会转的旋钮</h2>
+
+<table>
+  <thead><tr><th>环境变量</th><th>默认</th><th>什么时候改</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_SERVER_URL</code></td><td><code>ws://localhost:8080/ws</code></td><td>连自部署服务端</td></tr>
+    <tr><td><code>MULTICA_WORKSPACES_ROOT</code></td><td><code>$HOME/multica_workspaces</code></td><td>想把工作目录放到别的盘</td></tr>
+    <tr><td><code>MULTICA_DAEMON_MAX_CONCURRENT_TASKS</code></td><td>20</td><td>机器弱，想降并发</td></tr>
+    <tr><td><code>MULTICA_AGENT_RUNTIME_NAME</code></td><td><code>Local Agent</code></td><td>多台机器时给 Runtime 起可读名字</td></tr>
+    <tr><td><code>MULTICA_DAEMON_DEVICE_NAME</code></td><td>主机名</td><td>同上，便于在界面里区分设备</td></tr>
+    <tr><td><code>MULTICA_DAEMON_AUTO_UPDATE</code></td><td>官方云为开</td><td>自部署时可关掉自动更新</td></tr>
+  </tbody>
+</table>
+
+<h2>十、检索练习</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。推送会丢，轮询保正确性，两条路都必要。"
+     data-no="回到「推 + 拉双保险」那一节：为什么光有推送不够？">
+  <p class="q">1. daemon 已经通过 WebSocket 收到任务通知，为什么还要定时轮询？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为 WebSocket 通知只有付费工作区才会推送，免费版依赖轮询</button>
+    <button class="opt" data-key="b">因为推送会丢（网络抖动、重启、忙时错过），轮询是正确性兜底</button>
+    <button class="opt" data-key="c">因为轮询还负责上报心跳，WebSocket 通道只用来传任务内容</button>
+    <button class="opt" data-key="d">因为轮询能在 WebSocket 断开时自动重连并替代它</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="正确。目录被占用会进入等待态，而不是失败。"
+     data-no="回想第 5 课和本课第五节：目录被占时 daemon 会做什么？">
+  <p class="q">2. daemon 领到一条 Run，但目标本地目录正被另一条 Run 占用，它会？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">把这条 Run 直接标记为失败，等用户手动重试</button>
+    <button class="opt" data-key="b">复制一份目录副本，让两条 Run 并行操作各自的拷贝</button>
+    <button class="opt" data-key="c">抢占目录：终止前一条 Run 并接管它的工作区</button>
+    <button class="opt" data-key="d">上报进入等待目录状态，等目录释放后自动继续</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。看门狗就是防止外部 Agent 进程卡死导致 Run 永远停在 running。"
+     data-no="想想 Agent CLI 是外部程序：它挂住时，谁负责把这条 Run 收敛掉？">
+  <p class="q">3. 为什么需要 <code>MULTICA_AGENT_IDLE_WATCHDOG</code> 这类看门狗？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">防止外部 CLI 挂住或沉默时，Run 永久停在 running 无人收敛</button>
+    <button class="opt" data-key="b">防止服务端内存里积累过多 WebSocket 连接导致 OOM</button>
+    <button class="opt" data-key="c">限制单个 Agent 的 token 消耗，超出预算即中断任务</button>
+    <button class="opt" data-key="d">检测本机是否安装了重复的 CLI 版本并自动卸载旧版</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，按顺序写出 daemon 从"知道有活"到"Agent 进程跑起来"的全部步骤。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li>收到服务端推送（<code>/api/daemon/ws</code>）或轮询发现可领任务（30 秒一轮兜底）。</li>
+      <li><code>POST /api/daemon/tasks/claim</code> 原子认领；服务端把 <code>queued</code> 改成 <code>dispatched</code> 并签发 <code>mat_</code> 令牌。</li>
+      <li>解析 Agent 配置（provider、参数、Skill）。</li>
+      <li>定位本机 CLI 可执行文件（路径失效会自愈修正）。</li>
+      <li>准备本地工作目录；被占用则上报 <code>waiting_local_directory</code> 等待。</li>
+      <li><code>POST .../start</code> 声明开始 → <code>running</code>。</li>
+      <li>spawn CLI 进程，注入 <code>MULTICA_*</code> 环境变量与 <code>mat_</code> 令牌、分配并发槽位。</li>
+      <li>执行期间持续回传进度/消息/用量；看门狗监控空闲超时。</li>
+      <li>结束时报 <code>complete</code> 或 <code>fail</code>。</li>
+    </ol>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/internal/daemon/config.go</code> 顶部的 <code>Default*</code> 常量块——几十行把 daemon 的全部节奏与阈值写清楚了，是理解运行行为最快的地方。</p>
+  <p>辅助：<code>server/internal/daemon/daemon.go</code> 的 <code>Run()</code>（启动序列）；<code>internal/handler/daemon.go</code>（claim/start/complete 的服务端侧）；<code>apps/docs/content/docs/daemon-runtimes.zh.mdx</code>。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："一个 daemon 能不能同时服务两个工作区？"——能，而且这在源码里到处都是痕迹（<code>workspaceRegisterLock</code>、per-workspace 注册）。第 12 课讲自部署拓扑时会看到多工作区的实际形状。</p>
+
+<div class="lesson-nav">
+  <a href="0006-run-sequence.html">← 0006 · 端到端时序与凭据链</a>
+  <a href="0008-cli-and-daemon.html">0008 · CLI 与 daemon 是同一个二进制 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+:root {
+  --ink: #16181d;
+  --ink-2: #3d434d;
+  --muted: #6c737e;
+  --rule: #e4e6ea;
+  --rule-2: #f1f2f5;
+  --paper: #ffffff;
+  --wash: #fafbfc;
+  --accent: #0d6a5c;
+  --accent-soft: #e8f4f1;
+  --accent-2: #8a4b12;
+  --accent-2-soft: #fdf3e7;
+  --danger: #a3323a;
+  --danger-soft: #fdeeef;
+  --code-bg: #f5f6f8;
+  --radius: 6px;
+  --measure: 46rem;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 4.5rem 1.5rem 6rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+  font-size: 17px;
+  line-height: 1.72;
+  letter-spacing: 0.006em;
+}
+
+.page {
+  max-width: var(--measure);
+  margin: 0 auto;
+}
+
+/* ---------- masthead ---------- */
+
+.crumb {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.76rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 1.1rem;
+}
+
+.crumb a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--rule); }
+.crumb a:hover { color: var(--accent); border-color: var(--accent); }
+
+.kicker {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 0.5rem;
+}
+
+h1 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 1.95rem;
+  line-height: 1.28;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  margin: 0 0 0.6rem;
+}
+
+.deck {
+  font-size: 1.06rem;
+  color: var(--ink-2);
+  margin: 0 0 1.6rem;
+  max-width: 40rem;
+}
+
+.meta {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: 0.6rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.4rem;
+  margin: 0 0 2.4rem;
+}
+
+h2 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 1.24rem;
+  font-weight: 650;
+  letter-spacing: -0.006em;
+  margin: 2.9rem 0 0.9rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--rule);
+}
+
+h2:first-of-type { border-top: none; padding-top: 0; }
+
+h3 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 1.02rem;
+  font-weight: 650;
+  margin: 1.9rem 0 0.5rem;
+}
+
+p { margin: 0 0 1rem; }
+ul, ol { margin: 0 0 1rem; padding-left: 1.3rem; }
+li { margin: 0.32rem 0; }
+li > ul, li > ol { margin: 0.3rem 0 0.4rem; }
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(13, 106, 92, 0.28); }
+a:hover { border-bottom-color: var(--accent); }
+
+strong { font-weight: 650; }
+
+/* ---------- code ---------- */
+
+code {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.85em;
+  background: var(--code-bg);
+  border-radius: 3px;
+  padding: 0.1em 0.34em;
+  color: #123;
+  word-break: break-word;
+}
+
+pre {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.79rem;
+  line-height: 1.62;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0 0 1.2rem;
+}
+
+pre code { background: none; padding: 0; font-size: 1em; color: inherit; }
+
+/* ---------- tables ---------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 0 0 1.4rem;
+}
+
+th {
+  text-align: left;
+  font-weight: 650;
+  color: var(--ink-2);
+  border-bottom: 1.5px solid var(--rule);
+  padding: 0.45rem 0.7rem 0.45rem 0;
+  vertical-align: bottom;
+}
+
+td {
+  border-bottom: 1px solid var(--rule-2);
+  padding: 0.5rem 0.7rem 0.5rem 0;
+  vertical-align: top;
+}
+
+td code, th code { font-size: 0.92em; }
+tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+
+/* ---------- callouts ---------- */
+
+.callout {
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem 0.95rem;
+  margin: 0 0 1.4rem;
+  font-size: 0.94rem;
+  border: 1px solid transparent;
+}
+
+.callout p:last-child, .callout ul:last-child, .callout ol:last-child { margin-bottom: 0; }
+
+.callout .tag {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.35rem;
+}
+
+.callout.key { background: var(--accent-soft); border-color: rgba(13, 106, 92, 0.2); }
+.callout.key .tag { color: var(--accent); }
+
+.callout.analogy { background: var(--accent-2-soft); border-color: rgba(138, 75, 18, 0.18); }
+.callout.analogy .tag { color: var(--accent-2); }
+
+.callout.watch { background: var(--danger-soft); border-color: rgba(163, 50, 58, 0.18); }
+.callout.watch .tag { color: var(--danger); }
+
+.callout.plain { background: var(--wash); border-color: var(--rule); }
+.callout.plain .tag { color: var(--muted); }
+
+/* ---------- figure / diagram link ---------- */
+
+.fig {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.5rem;
+  background: var(--wash);
+}
+
+.fig .fig-label {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.4rem;
+}
+
+.fig p { font-size: 0.92rem; margin-bottom: 0.5rem; }
+.fig p:last-child { margin-bottom: 0; }
+.fig .open {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.86rem;
+}
+
+/* ---------- quiz ---------- */
+
+.quiz {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem 1.2rem;
+  margin: 0 0 1.5rem;
+  background: var(--paper);
+}
+
+.quiz .q {
+  font-weight: 650;
+  margin: 0 0 0.7rem;
+}
+
+.quiz .opts { display: grid; gap: 0.4rem; margin-bottom: 0.7rem; }
+
+.quiz button.opt {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.9rem;
+  text-align: left;
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  color: var(--ink);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.quiz button.opt:hover { background: var(--rule-2); border-color: #d3d6dc; }
+.quiz button.opt.right { background: var(--accent-soft); border-color: rgba(13, 106, 92, 0.45); }
+.quiz button.opt.wrong { background: var(--danger-soft); border-color: rgba(163, 50, 58, 0.4); }
+.quiz button.opt[disabled] { cursor: default; }
+
+.quiz .fb {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.87rem;
+  margin: 0;
+  color: var(--ink-2);
+  min-height: 1.2em;
+}
+
+.quiz .fb.ok { color: var(--accent); }
+.quiz .fb.no { color: var(--danger); }
+
+.recall {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.92rem;
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 0 0 1.5rem;
+}
+
+/* ---------- footer / nav ---------- */
+
+.ask {
+  margin: 3rem 0 0;
+  padding: 0.9rem 1.1rem;
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+.ask strong { color: var(--ink); }
+
+.lesson-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 2.2rem 0 0;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--rule);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.86rem;
+}
+
+.lesson-nav span { color: var(--muted); }
+
+.source {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  border-left: 3px solid var(--accent);
+  padding: 0.15rem 0 0.15rem 0.85rem;
+  margin: 0 0 1.5rem;
+}
+
+.source .lbl {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.2rem;
+}
+
+/* ---------- index page ---------- */
+
+.toc { list-style: none; padding: 0; margin: 0; }
+
+.toc li {
+  display: grid;
+  grid-template-columns: 3.1rem 1fr;
+  gap: 0.2rem 0.9rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--rule-2);
+  margin: 0;
+}
+
+.toc .num {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--muted);
+  padding-top: 0.22rem;
+}
+
+.toc .ttl { font-weight: 650; }
+.toc .ttl a { border-bottom: none; }
+.toc .ttl a:hover { border-bottom: 1px solid var(--accent); }
+.toc .why { font-size: 0.87rem; color: var(--muted); }
+
+@media (max-width: 640px) {
+  body { padding: 2.4rem 1.05rem 4rem; font-size: 16px; }
+  h1 { font-size: 1.55rem; }
+  .toc li { grid-template-columns: 2.5rem 1fr; }
+}
+
+@media print {
+  body { padding: 0; font-size: 10.5pt; }
+  .ask, .lesson-nav { display: none; }
+  h2 { break-after: avoid; }
+  pre, table, .callout, .quiz { break-inside: avoid; }
+  a { color: inherit; border: none; }
+}

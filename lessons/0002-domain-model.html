@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0002 · 领域模型：八个名词 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 2 课 / 共 14 课</p>
+<p class="kicker">Lesson 02</p>
+<h1>领域模型：先把八个名词钉死</h1>
+<p class="deck">Multica 的界面、HTTP API、数据库表、实时事件名全都用同一套词汇。这些名词不认识，后面每一课你都会卡在"这个词到底指什么"上。这一课只做定义，不做实现。</p>
+<div class="meta">
+  <span>约 30 分钟</span>
+  <span>对应图表：01 系统架构总览</span>
+  <span>对应源码：apps/docs/content/docs/concepts.zh.mdx · AGENTS.md</span>
+</div>
+
+<h2>一、为什么必须先学名词</h2>
+
+<p>你去看一条真实日志：</p>
+
+<pre><code>task:dispatch  issue=ENG-412  assignee_type=squad  runtime=r-9f2c  workspace=ws-1a</code></pre>
+
+<p>这一行里有 6 个领域名词。如果 <code>assignee_type</code> 和 <code>runtime</code> 的区别说不清，你就没法判断"这条日志说明它开始干活了没有"。</p>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>Multica 的领域模型是<strong>三层分离</strong>的：<strong>意图</strong>（Issue：我想让人做什么）／<strong>执行</strong>（Run：某次真的去做）／<strong>能力</strong>（Agent + Runtime：谁、在哪台机器上能做）。</p>
+<p>把这三层混在一起，是整个系统最容易产生的误解。</p>
+</div>
+
+<h2>二、八个名词，一张表</h2>
+
+<table>
+  <thead><tr><th>名词</th><th>一句话定义</th><th>在哪能看到它</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Workspace</strong> 工作区</td>
+      <td>租户与权限边界。所有数据都挂在某个 workspace 下，所有查询都按 <code>workspace_id</code> 过滤。</td>
+      <td>请求头 <code>X-Workspace-ID</code>；界面左上角切换器</td>
+    </tr>
+    <tr>
+      <td><strong>Issue</strong> 任务单</td>
+      <td>人的工作单元。有标题、描述、状态、标签、评论，可以被"指派"。</td>
+      <td>看板卡片；<code>issues</code> 相关表</td>
+    </tr>
+    <tr>
+      <td><strong>Run</strong> 执行</td>
+      <td>一次"让某个 Agent 去做这个 Issue"的尝试。<strong>代码里它叫 <code>task</code></strong>，界面上叫 Run。</td>
+      <td><code>agent_task_queue</code> 表；Run 详情页；<code>task:*</code> 事件</td>
+    </tr>
+    <tr>
+      <td><strong>Agent</strong> 智能体</td>
+      <td>一份<em>配置</em>：用哪个 provider（哪种 CLI）、什么系统提示、挂哪些 Skill。<strong>它不是进程。</strong></td>
+      <td>智能体设置页；<code>agentconfig</code> 包</td>
+    </tr>
+    <tr>
+      <td><strong>Runtime</strong> 运行时</td>
+      <td>某台机器上、某个 provider 的一次<em>实际可用安装</em>，由 daemon 扫描本机后注册上来。</td>
+      <td><code>runtimes</code>；<code>daemon status</code> 输出</td>
+    </tr>
+    <tr>
+      <td><strong>Squad</strong> 小队</td>
+      <td>一组 Agent 的集合，可以整体当作被指派人，也可以定义内部谁先谁后。</td>
+      <td><code>squads</code>；<code>squad.sql</code></td>
+    </tr>
+    <tr>
+      <td><strong>Skill</strong> 技能</td>
+      <td>可复用的提示词／流程包，可以派给 Agent 或 Squad，运行时注入到 CLI。</td>
+      <td><code>skills</code>；<code>internal/skill</code>、<code>pkg/skillbundle</code></td>
+    </tr>
+    <tr>
+      <td><strong>Autopilot</strong> 自动驾驶</td>
+      <td>自动化触发器：定时（cron）或 webhook 一到就创建 Issue 并派活。</td>
+      <td><code>autopilots.zh.mdx</code>；<code>internal/scheduler</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>还有两个你马上会遇到的：</p>
+
+<ul>
+  <li><strong>Project</strong> 项目：一个代码仓库的绑定关系（Git/VCS 连接、默认分支、本地目录规则）。它决定 daemon 把哪个目录交给 Agent。</li>
+  <li><strong>Inbox</strong> 收件箱：需要<em>你</em>处理的流。Agent 干完交回评审、有人 @ 你、Run 失败——都进 Inbox。</li>
+</ul>
+
+<h2>三、三个最容易搞错的地方</h2>
+
+<h3>1. Issue 和 Run 是 1:N，不是 1:1</h3>
+
+<p>一个 Issue 可以有很多个 Run：第一次失败了重试一次、换一个 Agent 再来一次、你加了条评论触发了"补充执行"。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>在 Oracle 里，<code>Issue</code> 像一张业务单据，<code>Run</code> 像这张单据对应的执行记录——用 <code>DBMS_SCHEDULER</code> 跑一次就是一个 job run 实例，用 PL/SQL 手工重跑一次又是一个。单据只有一张，执行记录可以有很多条，每条都有自己的状态和时间戳。</p>
+<p>这也解释了为什么 Run 详情页要显示"这是第 3 次执行"。</p>
+</div>
+
+<h3>2. Agent ≠ Runtime（最关键的一条）</h3>
+
+<p>这是新用户最常混的一对：</p>
+
+<table>
+  <thead><tr><th></th><th>Agent</th><th>Runtime</th></tr></thead>
+  <tbody>
+    <tr><td>是什么</td><td>逻辑身份 + 配置</td><td>物理能力（某台机上装好的某个 CLI）</td></tr>
+    <tr><td>谁创建</td><td>你，在界面上手动建</td><td>daemon 扫本机后自动注册</td></tr>
+    <tr><td>数量</td><td>一个 Agent 对应零到多个 Runtime</td><td>一台机 + 一个 provider = 一个 Runtime</td></tr>
+    <tr><td>会消失吗</td><td>不会，除非你归档它</td><td>会。daemon 停了、CLI 卸载了、版本被降级了都会掉线</td></tr>
+  </tbody>
+</table>
+
+<p>所以会出现这种情况：界面里那个叫"前端重构手"的 Agent 好好的，但派活给它总是失败——真正的原因是你笔记本上的 daemon 没起来，它对应的 Runtime 全部离线。</p>
+
+<h3>3. 被指派人（assignee）是多态的</h3>
+
+<p>一条 Issue 可以被指派给<strong>人</strong>、<strong>Agent</strong> 或者<strong>Squad</strong>。<code>AGENTS.md</code> 里对这条有硬规定：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Assignees are polymorphic: interpret assignee_id together with assignee_type.</code>（AGENTS.md · Backend UUID Rules）</p>
+</div>
+
+<p>实践含义：数据库里只有一列 <code>assignee_id</code>，光看它对不出是人还是 Agent。<strong>必须配上 <code>assignee_type</code> 一起读</strong>。这一条在你自己写 SQL 查数据时会直接决定结果对不对。</p>
+
+<h2>四、把它们画成一张图</h2>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>01 系统架构总览</strong>——重点看"谁拥有谁"：Workspace 包住一切；daemon 在你自己那台机器上、把 Runtime 注册给服务端；Agent CLI 是被 daemon spawn 出来的进程。对着上面的表逐块对号。</p>
+  <p class="open"><a href="../diagrams/01-system-architecture.html">打开架构图 →</a></p>
+</div>
+
+<p>把关系写成一棵归属树（左边的拥有右边的）：</p>
+
+<pre><code>Workspace
+├─ Member（人）
+├─ Agent（配置）──────── 可挂 Skill / 可组进 Squad
+├─ Squad（Agent 的集合）
+├─ Project（仓库绑定）
+├─ Autopilot（定时/webhook 触发器）
+└─ Issue（工作单元）
+   └─ Run（= task，执行尝试）×N
+      └─ 指向：Runtime（在哪台机、哪个 CLI 上跑）
+      └─ 指向：Agent / Squad（谁在跑）
+      └─ 产生：执行日志、消息、用量、Inbox 通知</code></pre>
+
+<h2>五、检索练习</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。Agent 是配置（逻辑身份），Runtime 是某台机器上实际可用的 CLI 安装。Agent 在、Runtime 离线，活就派不出去。"
+     data-no="回想那张对比表：一个是你手动建的配置，一个是 daemon 自动扫本机注册上来的物理能力。">
+  <p class="q">1. 你在界面上看到 Agent「前端重构手」状态正常，但派活总是失败。最可能的原因是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">这个 Agent 的配置里没有绑定任何 Skill</button>
+    <button class="opt" data-key="b">它对应的 Runtime 全部离线，没有可用的执行环境</button>
+    <button class="opt" data-key="c">这个 Agent 的 provider 与 Issue 的标签不匹配</button>
+    <button class="opt" data-key="d">它所在的 Squad 还没有被指派过任何任务单</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="正确。Issue 是意图，Run 是执行；一次失败后可以再产生新的 Run。"
+     data-no="回到 1:N 那一节：想清楚哪个是工作单元，哪个是「去做一次」。">
+  <p class="q">2. 同一个 Issue 下出现 5 条 Run 记录，最合理的解释是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">数据异常：设计上一个 Issue 只允许有一条 Run</button>
+    <button class="opt" data-key="b">这 5 条 Run 分别属于 5 个不同工作区，被前端合并显示了</button>
+    <button class="opt" data-key="c">系统把 Issue 的 5 个标签各自当成一次执行记录保存</button>
+    <button class="opt" data-key="d">它被反复执行过：重试、换 Agent、或评论触发了补充执行</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。两个字段必须合起来读，单看 assignee_id 无法判断被派活的是人是 Agent。"
+     data-no="看 AGENTS.md 里那条规定：assignees are polymorphic。">
+  <p class="q">3. 你写 SQL 想统计"被指派给 Agent 的 Issue 数量"，为什么不能只按 assignee_id 分组？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为 assignee 是多态的，必须结合 assignee_type 才能区分人 / Agent / Squad</button>
+    <button class="opt" data-key="b">因为 assignee_id 在 Issue 表里是可空的，空值会被分组统计漏掉</button>
+    <button class="opt" data-key="c">因为同一个 Agent 在不同工作区里有不同的 assignee_id</button>
+    <button class="opt" data-key="d">因为 Squad 类型的指派会被拆成多条记录写入同一张表</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上面的树，凭记忆写出：一个 Issue 从被创建到一次执行结束，会牵出哪些对象？它们之间谁指向谁？</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>Issue</strong> 在某个 <strong>Workspace</strong> 下被创建，带上 <code>assignee_type</code> + <code>assignee_id</code>（指向 Member / Agent / Squad）。</li>
+      <li>指派动作触发一条 <strong>Run</strong>（表名 <code>agent_task_queue</code>），它引用 Issue、被指派的 Agent/Squad，以及一个 <strong>Runtime</strong>。</li>
+      <li>Runtime 属于某台机器上的 <strong>daemon</strong>；daemon 拿到 Run 后，按 <strong>Project</strong> 的仓库/目录规则准备本地路径，spawn 对应的 <strong>Agent CLI</strong> 进程。</li>
+      <li>CLI 执行期间，daemon 把进度和消息回传服务端；服务端写成 Run 的日志/用量，并给相关的人推 <strong>Inbox</strong> 通知。</li>
+      <li>结束时 Run 变成 <code>completed</code> / <code>failed</code> / <code>cancelled</code>（状态机是第 5 课的内容）。</li>
+    </ol>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>apps/docs/content/docs/concepts.zh.mdx</code>——官方的概念总表，中文齐全。先读它，再回来核对本课的表。</p>
+  <p>辅助：<code>AGENTS.md</code> 的 <em>Backend UUID Rules</em> 一节（assignee 多态那条硬规定就在这里）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："Squad 里的 Agent 是并行还是串行？"——这属于第 5 课和第 7 课的交界处，答案在 <code>squads.zh.mdx</code> 里，我们可以先把名词弄清再去看原文。</p>
+
+<div class="lesson-nav">
+  <a href="0001-what-is-multica.html">← 0001 · 先看清全貌</a>
+  <a href="0003-repo-layers.html">0003 · 仓库分层与依赖方向 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

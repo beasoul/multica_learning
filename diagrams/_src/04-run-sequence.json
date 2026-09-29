@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "一次 Run 的端到端时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1000, 860],
+    "column_fit": "spread",
+    "views": [
+      { "id": "trigger-and-enqueue", "label": "触发与入队", "focus": ["human", "client", "api", "db"], "note": "指派或提及只做一件事：写一条 queued task，并把通知发给那台机器。" },
+      { "id": "claim-and-execute", "label": "领取与执行", "focus": ["api", "daemon", "cli"], "note": "服务端签发一次性凭据，daemon 才 spawn 工具；真正干活的是工具本身。" },
+      { "id": "report-and-settle", "label": "回写与收尾", "focus": ["daemon", "api", "db", "client", "human"], "note": "进度、用量、最终状态都写回数据库，再通过实时事件刷新客户端。" }
+    ]
+  },
+  "participants": [
+    { "id": "human", "type": "external", "label": "成员", "sublabel": "指派或提及" },
+    { "id": "client", "type": "frontend", "label": "Web / Desktop", "sublabel": "看板与执行日志" },
+    { "id": "api", "type": "backend", "label": "Go API", "sublabel": "Chi + WebSocket" },
+    { "id": "db", "type": "database", "label": "PostgreSQL", "sublabel": "权威状态" },
+    { "id": "daemon", "type": "backend", "label": "Agent daemon", "sublabel": "本机长连接" },
+    { "id": "cli", "type": "external", "label": "AI 工具 CLI", "sublabel": "Claude Code…" }
+  ],
+  "segments": [
+    { "from": 150, "to": 330, "label": "触发与入队" },
+    { "from": 350, "to": 612, "label": "领取与执行" },
+    { "from": 632, "to": 800, "label": "回写与收尾" }
+  ],
+  "messages": [
+    { "id": "m1", "from": "human", "to": "client", "y": 180, "label": "把 Issue 指派给智能体", "variant": "emphasis" },
+    { "id": "m2", "from": "client", "to": "api", "y": 222, "label": "POST /api/issues/{id}", "variant": "emphasis" },
+    { "id": "m3", "from": "api", "to": "db", "y": 264, "label": "写入 issue + 一条 queued task", "variant": "default" },
+    { "id": "m4", "from": "api", "to": "daemon", "y": 306, "label": "daemon WS：通知有任务可用", "variant": "dashed" },
+    { "id": "m5", "from": "daemon", "to": "api", "y": 348, "label": "POST /api/daemon/tasks/claim", "variant": "emphasis" },
+    { "id": "m6", "from": "api", "to": "daemon", "y": 390, "label": "返回 task + 签发 mat_ 一次性凭据", "variant": "return" },
+    { "id": "m7", "from": "api", "to": "client", "y": 432, "label": "task:queued / task:dispatch", "variant": "dashed" },
+    { "id": "m8", "from": "daemon", "to": "cli", "y": 474, "label": "spawn 工具进程并注入 MULTICA_TASK_ID", "variant": "emphasis" },
+    { "id": "m9", "from": "cli", "to": "daemon", "y": 516, "label": "流式事件：消息、工具调用、错误", "variant": "return" },
+    { "id": "m10", "from": "daemon", "to": "api", "y": 558, "label": "上报进度与增量消息", "variant": "default" },
+    { "id": "m11", "from": "api", "to": "client", "y": 600, "label": "task:progress 事件", "variant": "dashed" },
+    { "id": "m12", "from": "daemon", "to": "api", "y": 642, "label": "complete / fail + usage 上报", "variant": "emphasis" },
+    { "id": "m13", "from": "api", "to": "db", "y": 684, "label": "更新 task、issue 与用量表", "variant": "default" },
+    { "id": "m14", "from": "api", "to": "client", "y": 726, "label": "task:completed + issue:updated", "variant": "dashed" },
+    { "id": "m15", "from": "client", "to": "human", "y": 768, "label": "执行日志刷新，Issue 进入评审", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "client", "from": 174, "to": 238, "type": "frontend" },
+    { "participant": "api", "from": 216, "to": 440, "type": "backend" },
+    { "participant": "db", "from": 258, "to": 276, "type": "database" },
+    { "participant": "daemon", "from": 300, "to": 400, "type": "backend" },
+    { "participant": "daemon", "from": 468, "to": 654, "type": "backend" },
+    { "participant": "cli", "from": 468, "to": 524, "type": "external" },
+    { "participant": "api", "from": 552, "to": 736, "type": "backend" },
+    { "participant": "db", "from": 678, "to": 696, "type": "database" },
+    { "participant": "client", "from": 720, "to": 776, "type": "frontend" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "触发只做一件事", "items": ["指派、@ 提及、自动化最终都落到一条 queued task", "分配本身不执行任何代码，只是入队", "@ 提及不会改变 Issue 的负责人和状态"] },
+    { "dot": "amber", "title": "凭据是执行的前提", "items": ["daemon 领取 task 时服务端才签发 mat_ 一次性凭据", "该凭据同时绑定智能体与这一次 Run，无法代表用户行事", "代码、目录与会话始终留在 daemon 那一侧"] },
+    { "dot": "emerald", "title": "数据库是最终状态", "items": ["WebSocket 只负责降低延迟，重连后靠查询重新校准", "daemon 仍保留轮询路径，避免一次断连让 queued 卡死", "进度、用量、最终状态都先落库再广播"] }
+  ]
+}

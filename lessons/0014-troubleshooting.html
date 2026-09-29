@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0014 · 故障排查与动手改一处 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 14 课 / 共 14 课</p>
+<p class="kicker">Lesson 14</p>
+<h1>收官：分诊故障，然后动手改一处</h1>
+<p class="deck">最后一课做两件事：把前面 13 课的零件组装成一套<strong>排查流程</strong>（而不是一堆要背的故障列表），再给你一条最小改动的路径——改得动，才算真读懂。</p>
+<div class="meta">
+  <span>约 40 分钟</span>
+  <span>对应源码：troubleshooting.zh.mdx · tasks.zh.mdx · AGENTS.md（Change and Delivery Rules）</span>
+</div>
+
+<h2>一、固定开场：三条命令</h2>
+
+<p>不管是"连不上"还是"不干活"，先打这三条，把事实钉住：</p>
+
+<pre><code>multica auth status                    # 我是谁、令牌还有效吗
+multica daemon status --output json    # 检测到哪些 Agent、监听哪些工作区
+multica daemon logs --lines 100        # 最近的现场</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><code>daemon logs</code> 在输出日志内容<strong>之前</strong>会先打印它解析到的绝对路径。这一行的价值在于：它能立刻告诉你"你看的是不是那个正在写的文件"（第 8 课那个坑）。看不出问题时先看这一行。</p>
+</div>
+
+<h2>二、按"Run 停在哪"分诊</h2>
+
+<p>这是本课的核心方法。第 5 课那张状态机表现在变成分诊表——<strong>先确定卡在哪个状态，再走对应的分支</strong>，比背一份故障清单有效得多。</p>
+
+<h3>分支 A：一直 <code>queued</code>（没有运行时来领）</h3>
+
+<p>依次检查四件事：</p>
+
+<ol>
+  <li>Agent 绑定的<strong>运行时是否在线</strong>；</li>
+  <li>运行时是否<strong>检测到了该 Agent 配置的那个工具</strong>；</li>
+  <li>Agent 是否还有<strong>可用并发额度</strong>（默认单个 Agent 最多同时 6 次运行）；</li>
+  <li>daemon 是否还有<strong>全局执行容量</strong>（默认单 daemon 最多同时 20 次）。</li>
+</ol>
+
+<pre><code>multica daemon status --output json
+multica agent get &lt;agent-id&gt;
+multica issue runs &lt;issue-id&gt;</code></pre>
+
+<div class="callout watch">
+  <span class="tag">重要澄清</span>
+<p><strong>"排队很久"本身不是故障。</strong>官方文档明确说明：运行时离线时，运行会<em>继续排队</em>；只有该运行时的心跳缺席超过重连宽限期、<strong>并且这条运行自己也已经等满这么久</strong>，才会失败。</p>
+<p>所以排在忙碌运行时后面的长队列不会因为"等太久"被判失败。看到 <code>queued</code> 先查上面四项，不要急着下"系统坏了"的结论。</p>
+</div>
+
+<p>如果运行时列表里缺少预期工具：先在<strong>同一个系统账号和 PATH</strong> 下确认那个工具能跑、已登录，再 <code>multica daemon restart</code>。</p>
+
+<h3>分支 B：停在 <code>waiting_local_directory</code>（目录被占）</h3>
+
+<p>含义：另一条在途运行正在使用同一个本地目录。<strong>互斥存在的意义是避免两个 Agent 同时改同一份文件。</strong></p>
+
+<p>关键补充（这一点文档里写得很有用）：</p>
+
+<ul>
+  <li>这种等待<strong>只存在于目录的 <code>in_place</code>（原地）模式</strong>。如果这个目录是 git 仓库，把资源切到 <code>worktree</code>（并行）模式<strong>就没有队列了</strong>——每次运行拿到自己的 worktree，以分支形式交回结果，谁都不用等谁。</li>
+  <li>这个目录互斥是<strong>daemon 在内存里维护的，不写磁盘锁文件</strong>。所以怀疑锁状态异常时，<code>multica daemon restart</code> 即可释放——<em>没有需要你手动删除的文件</em>。</li>
+</ul>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>这一条是最好的"架构知识转化为操作"的例子：<strong>因为它不落盘，所以不存在"删锁文件"这种操作</strong>。不了解实现的人会去找一个根本不存在的文件。</p>
+</div>
+
+<h3>分支 C：<code>running</code> 但没产出 / 工具起不来</h3>
+
+<p>daemon 在线<strong>不等于</strong>工具可用。打开这次运行的详细记录，按这个清单查：</p>
+
+<table>
+  <thead><tr><th>检查项</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td>工具是否已登录</td><td>daemon 只负责 spawn，登录态是工具自己的事</td></tr>
+    <tr><td>API key / 额度 / 模型权限是否可用</td><td>任务能起但请求会被拒</td></tr>
+    <tr><td>Agent 选的模型与思考级别是否被该工具支持</td><td>第 8 课那些 <code>MULTICA_*_MODEL</code> 覆盖项设错就会这样</td></tr>
+    <tr><td>本地工作目录是否存在且可写</td><td>目录被删、权限变了</td></tr>
+    <tr><td>自定义参数或环境变量是否有效</td><td>参数解析失败会让进程立刻退出</td></tr>
+  </tbody>
+</table>
+
+<p>最快的验证方法：<strong>在执行那台机器的终端里，直接手工运行同一个工具</strong>。工具自己都起不来，就先修它的配置，再从执行日志重试。</p>
+
+<h2>三、分支 D：daemon 连不上服务端</h2>
+
+<p>常见原因就五条：</p>
+
+<ol>
+  <li>CLI 尚未登录，或本机令牌已失效；</li>
+  <li>daemon 连了<strong>错误的服务端</strong>（profile 配错）；</li>
+  <li>执行那台机器访问不到 API —— DNS、TLS、防火墙拦截；</li>
+  <li>当前账号已经<strong>不在目标工作区</strong>里了；</li>
+  <li>本机<strong>没装任何受支持的 AI 编程工具</strong>，daemon 因此起不来。</li>
+</ol>
+
+<pre><code>multica login
+multica daemon restart
+multica config show        # 确认 server_url / app_url 对不对</code></pre>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>自部署场景有一条极容易被忽略的指引：<strong>要从"执行电脑"去请求 API 的 <code>/health</code></strong>——在服务器本机测是测不出执行机侧的 DNS、TLS、防火墙问题的。</p>
+<p>这是一条通用的排查纪律：<strong>在出问题的那一侧测，不要在你的机器上测。</strong></p>
+</div>
+
+<h2>四、分支 E：界面不实时了</h2>
+
+<p>按顺序查（对应第 9 课）：</p>
+
+<ol>
+  <li><code>FRONTEND_ORIGIN</code> 是否与浏览器实际打开的地址一致；</li>
+  <li>HTTPS 页面是否通过 <code>wss://</code> 连接；</li>
+  <li>反向代理是否<strong>转发了 WebSocket 的 Upgrade 请求</strong>（这是最常见的部署踩坑点）；</li>
+  <li>浏览器登录是否已过期。</li>
+</ol>
+
+<p>顺便复习第 9 课的结论：<strong>实时失效不会让数据变错，只会让它看起来旧。</strong>刷新页面能拿到正确状态，说明问题就在实时链路。</p>
+
+<h2>五、日志在哪</h2>
+
+<table>
+  <thead><tr><th>组件</th><th>怎么看</th></tr></thead>
+  <tbody>
+    <tr><td>后台 daemon</td><td><code>multica daemon logs --lines 100</code></td></tr>
+    <tr><td>实时跟随</td><td><code>multica daemon logs --follow</code></td></tr>
+    <tr><td>默认 profile 日志</td><td><code>~/.multica/daemon.log</code></td></tr>
+    <tr><td>默认 profile 启动/崩溃日志</td><td><code>~/.multica/daemon.err.log</code></td></tr>
+    <tr><td>命名 profile</td><td><code>~/.multica/profiles/&lt;name&gt;/</code> 下的对应文件</td></tr>
+    <tr><td>Docker 后端</td><td><code>docker compose -f docker-compose.selfhost.yml logs -f backend</code></td></tr>
+    <tr><td>浏览器</td><td>开发者工具的 Console 与 Network</td></tr>
+  </tbody>
+</table>
+
+<p>要看 daemon 的<strong>启动过程</strong>，就前台跑：</p>
+
+<pre><code>multica daemon stop
+multica daemon start --foreground</code></pre>
+
+<h2>六、动手改一处：三个梯度的选择</h2>
+
+<p>MISSION 的最后一条是"能在源码里自己定位并改"。给你三个梯度，按你当时的状态挑一个：</p>
+
+<table>
+  <thead><tr><th>梯度</th><th>改动</th><th>要动的文件</th><th>验证</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>S · 前端展示</strong></td>
+      <td>在某个页面加一段只读信息（例如 Run 列表里多显示一个字段）</td>
+      <td><code>packages/views/...</code>，必要时 <code>packages/ui</code></td>
+      <td><code>pnpm typecheck</code> + <code>pnpm test</code></td>
+    </tr>
+    <tr>
+      <td><strong>M · 前端数据</strong></td>
+      <td>给 Issue 列表加一个新筛选条件（沿用现有 query hooks）</td>
+      <td><code>packages/core</code>（查询参数）+ <code>packages/views</code>（筛选控件）</td>
+      <td><code>make check</code> 或按范围跑</td>
+    </tr>
+    <tr>
+      <td><strong>L · 全栈只读</strong></td>
+      <td>新增一个只读 HTTP 接口并接进前端</td>
+      <td><code>router.go</code> + <code>internal/handler</code> + <code>pkg/db/queries/*.sql</code>（<code>make sqlc</code>）+ <code>packages/core/api</code></td>
+      <td><code>make check</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>我建议从 <strong>M</strong> 开始。理由：它同时踩到第 3 课（分层边界）和第 4 课（数据在哪），又不用碰数据库迁移——覆盖了最多知识点，风险最低。</p>
+
+<h3>改代码前必须知道的五条规矩</h3>
+
+<p>全部来自 <code>AGENTS.md</code> 的 <em>Change and Delivery Rules</em>：</p>
+
+<ol>
+  <li><strong>保持改动范围小，复用现有模式</strong>；代码注释用英文。</li>
+  <li><strong>不要自作主张加兼容层</strong>——不加内部 shim、双写、回退路径或旧版适配器（除非被要求）。注意这<em>不</em>放松 API 响应兼容性的要求。</li>
+  <li>新增全局 pre-workspace 路由命名有规则（单词或 <code>/{名词}/{动词}</code>，不用连字符根名）；改保留 slug 要更新 <code>server/internal/handler/reserved_slugs.json</code>、跑 <code>pnpm generate:reserved-slugs</code>，并提交生成的 <code>packages/core/paths/reserved-slugs.ts</code>。</li>
+  <li>用<strong>原子的 convention commits</strong>，并套用仓库的 PR 模板。</li>
+  <li>改了 SQL 要 <code>make sqlc</code>；改了查询/接口要同步更新对应的 zod schema 与「畸形响应」测试。</li>
+</ol>
+
+<h2>七、检索练习（收官题）</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。「排队久」不是故障；运行时离线时运行会继续排队，只有心跳缺席超宽限期且运行也等满同样久才失败。"
+     data-no="回想那条重要澄清：运行在运行时离线时会怎样？">
+  <p class="q">1. 一条 Run 已经 <code>queued</code> 两个小时，运行时才离线半小时。它应该？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">已经失败，因为等待时间超过了运行时离线容忍窗口</button>
+    <button class="opt" data-key="b">继续排队；要等心跳缺席超过重连宽限期、且它自己也等满同样久才失败</button>
+    <button class="opt" data-key="c">立刻失败并进入 Inbox 提醒，因为没有任何运行时在线</button>
+    <button class="opt" data-key="d">被自动重新指派给其他工作区的运行时继续执行</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="正确。目录互斥是 daemon 内存态，重启即释放，没有锁文件可删。"
+     data-no="回想那句：这个互斥由守护进程在内存中维护，不写磁盘锁文件。">
+  <p class="q">2. 你怀疑 <code>waiting_local_directory</code> 的锁状态异常，正确做法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">去工作目录下找到并删除锁文件</button>
+    <button class="opt" data-key="b">手工删掉那个目录，让 daemon 重新创建一份</button>
+    <button class="opt" data-key="c">把项目资源切成 in_place 模式以绕开锁</button>
+    <button class="opt" data-key="d">重启 daemon —— 它是内存态，重启即释放</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。必须在出问题的那一侧测，服务器本机测不出执行机的网络问题。"
+     data-no="回想那条排查纪律：在服务器上测 /health 能发现执行机的防火墙问题吗？">
+  <p class="q">3. 自部署环境下执行机连不上服务端。为什么"在服务器上 curl 自己的 <code>/health</code>"帮助不大？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为它测不出执行机侧的 DNS、TLS 与防火墙问题，必须在执行机上请求</button>
+    <button class="opt" data-key="b">因为 <code>/health</code> 不检查数据库，所以永远返回成功而误导判断</button>
+    <button class="opt" data-key="c">因为 <code>/health</code> 只监听回环地址，外部请求本来就会被拒绝</button>
+    <button class="opt" data-key="d">因为该端点需要 daemon 令牌，人工 curl 无法通过认证</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，写出你的完整排查流程（从现象到结论）。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>固定开场</strong>：<code>multica auth status</code> → <code>daemon status --output json</code> → <code>daemon logs</code>（先看它打印的绝对路径）。</li>
+      <li><strong>定位 Run 的状态</strong>，据此分诊：
+        <ul>
+          <li><code>queued</code> → 查运行时在线 / 工具检测 / Agent 并发额度 / daemon 全局容量。</li>
+          <li><code>waiting_local_directory</code> → 目录互斥；考虑切 <code>worktree</code> 模式；要释放就重启 daemon。</li>
+          <li><code>running</code> 无产出 → 查工具自身（登录、key、模型与思考级别、目录可写、自定义参数），并手工直接运行该工具验证。</li>
+          <li><code>failed</code> → 读运行详情里的失败原因（这是唯一"自带答案"的状态）。</li>
+        </ul>
+      </li>
+      <li><strong>若是连接类问题</strong>：查五条常见原因，并在<em>执行机</em>上请求 API 的 <code>/health</code>，用 <code>config show</code> 核对 <code>server_url</code>。</li>
+      <li><strong>若是实时类问题</strong>：查 <code>FRONTEND_ORIGIN</code>、<code>wss://</code>、反代是否转发 Upgrade、登录是否过期。</li>
+      <li><strong>还定位不了</strong>：<code>multica daemon start --foreground</code> 看启动过程；然后去 GitHub Issues 搜同类问题。</li>
+    </ol>
+    <p>核心心法：<strong>先确定"卡在哪个环节"，再走那一个分支</strong>。不要从故障清单第一条开始逐条试。</p>
+  </div>
+</div>
+
+<h2>八、课程到这里，你已经拿到了什么</h2>
+
+<p>回头对一遍 MISSION 里那七条成功标准：</p>
+
+<table>
+  <thead><tr><th>目标</th><th>对应课程</th></tr></thead>
+  <tbody>
+    <tr><td>讲清八个领域名词与本质差别</td><td>0001、0002</td></tr>
+    <tr><td>自部署 + 本地开发两条路都跑通</td><td>0012</td></tr>
+    <tr><td>按"请求 → 中间件 → handler → service → SQL"定位接口</td><td>0003、0004</td></tr>
+    <tr><td>画出并解释 Run 从 queued 到 completed 的完整链路</td><td>0005、0006</td></tr>
+    <tr><td>读懂 core/ui/views 分工，找到事件改了哪个 query cache</td><td>0003、0009</td></tr>
+    <tr><td>用 CLI 脚本化创建 Issue、指派、看日志</td><td>0008</td></tr>
+    <tr><td>面对"跑了但没动""一直 queued"能列出排查步骤</td><td>0014（配合 0005、0007）</td></tr>
+  </tbody>
+</table>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>apps/docs/content/docs/troubleshooting.zh.mdx</code>——按现象分节，每节都给了命令。本课第二节几乎逐条来自它。</p>
+  <p>辅助：<code>apps/docs/content/docs/tasks.zh.mdx</code>（状态与超时参考）；<code>AGENTS.md</code> 的 <em>Change and Delivery Rules</em>；<code>docs/../conventions.zh.mdx</code>（命名与文案规范）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，课到此结束，但别急着走。</strong>接下来最有效的三件事：①把 <code>reference/</code> 下那几份速查表过一遍，它们是把 14 课压缩成可随时查的形态；②挑一个梯度 M 的改动真的做一次；③遇到具体报错直接来问我，比再读一遍文档快得多。</p>
+
+<div class="lesson-nav">
+  <a href="0013-integrations-plugins.html">← 0013 · 集成与插件</a>
+  <a href="../index.html">回到课程目录 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

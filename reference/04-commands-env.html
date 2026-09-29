@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 命令与环境变量 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 速查文档 4 / 5</p>
+<p class="kicker">Reference 04</p>
+<h1>命令与环境变量</h1>
+<p class="deck">写脚本、调 daemon 参数时查这一页。命令来自 <code>CLI_AND_DAEMON.md</code> 与 <code>Makefile</code>；环境变量默认值来自 <code>internal/daemon/config.go</code>。</p>
+<div class="meta"><span>约 8 分钟</span><span>对应课程：0008、0012</span></div>
+
+<h2>起步三条</h2>
+
+<pre><code>multica setup              # 一条命令：写配置 + 浏览器登录 + 起 daemon（连官方云）
+multica setup self-host    # 连自部署
+multica daemon status      # 确认检测到哪些 Agent、监听哪些工作区</code></pre>
+
+<h2>daemon 操作</h2>
+
+<table>
+  <thead><tr><th>命令</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>multica daemon start</code></td><td>后台起；<code>--foreground</code> 前台跑（看启动过程）</td></tr>
+    <tr><td><code>multica daemon stop</code> / <code>restart</code></td><td>停 / 重启（重启会释放内存态的目录互斥）</td></tr>
+    <tr><td><code>multica daemon status --output json</code></td><td>机器可读状态</td></tr>
+    <tr><td><code>multica daemon logs -f</code> · <code>-n 100</code> · <code>--profile &lt;name&gt;</code></td><td>看日志；<strong>每次都先打印它解析到的绝对路径</strong></td></tr>
+    <tr><td><code>multica daemon disk-usage</code></td><td>磁盘占用（<code>.repos</code> 单独一行）</td></tr>
+  </tbody>
+</table>
+
+<h2>认证 / 配置</h2>
+
+<table>
+  <thead><tr><th>命令</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>multica login</code></td><td>浏览器 OAuth，生成 90 天 PAT，自动加入你所属工作区</td></tr>
+    <tr><td><code>multica login --token &lt;mul_...&gt;</code></td><td>无头环境；<code>--token=</code> 交互输入（不进 shell 历史）</td></tr>
+    <tr><td><code>multica auth status</code> / <code>auth logout</code></td><td>查当前服务端、用户、令牌有效性 / 清除令牌</td></tr>
+    <tr><td><code>multica config show</code></td><td>看配置文件路径、<code>server_url</code>、<code>app_url</code>、默认工作区</td></tr>
+    <tr><td><code>multica config set server_url &lt;url&gt;</code></td><td>改服务端地址</td></tr>
+    <tr><td><code>multica workspace switch &lt;id|slug&gt;</code></td><td>切换默认工作区（会先校验可访问）</td></tr>
+  </tbody>
+</table>
+
+<p>工作区解析优先级（高到低）：<code>--workspace-id</code> → <code>MULTICA_WORKSPACE_ID</code> → 当前 profile 保存的默认值。<strong>脚本里用前两个。</strong></p>
+
+<h2>Issue / Run 日常</h2>
+
+<pre><code>multica issue list --status todo --assignee "Lambda" --output json
+multica issue create --title "..." --priority high --assignee "Lambda"
+multica issue assign &lt;id&gt; --to "Lambda"        # 或 --to-id &lt;uuid&gt; / --unassign
+multica issue status &lt;id&gt; in_progress
+multica issue reorder &lt;id&gt; --top                # --bottom / --before / --after
+
+multica issue runs &lt;id&gt;                         # 全部执行记录
+multica issue runs &lt;id&gt; --active --output json  # 只看在途的
+multica issue run-messages &lt;task-id&gt; --since 42 # 单次运行的详细消息流
+multica issue usage &lt;id&gt; --output json          # 聚合 token 用量</code></pre>
+
+<p>内建状态：<code>backlog</code> · <code>todo</code> · <code>in_progress</code> · <code>in_review</code> · <code>done</code> · <code>blocked</code> · <code>cancelled</code>（工作区可加自定义状态）。</p>
+
+<h2>Autopilot 与其它</h2>
+
+<pre><code>multica autopilot list --status active --output json
+multica autopilot trigger &lt;id&gt;                  # 手动触发一次（未真正启动则非零退出）
+multica autopilot trigger-add &lt;id&gt; --cron "0 9 * * 1-5" --timezone "Asia/Shanghai"
+multica autopilot trigger-add &lt;id&gt; --kind webhook
+multica autopilot runs &lt;id&gt; --limit 50 --output json
+
+multica agent list                              # 当前工作区的 Agent
+multica project create --title "..." --lead "Lambda"
+multica version · multica update</code></pre>
+
+<h2>脚本友好性</h2>
+
+<table>
+  <thead><tr><th>能力</th><th>用法</th></tr></thead>
+  <tbody>
+    <tr><td>JSON 输出</td><td><code>--output json</code></td></tr>
+    <tr><td>字段裁剪（仅 JSON）</td><td><code>--fields=id,title,status,priority</code></td></tr>
+    <tr><td>退出码</td><td><code>0</code> 成功 · <code>1</code> 未分类 · <code>2</code> 网络 · <code>3</code> 认证/授权 · <code>4</code> 未找到 · <code>5</code> 校验</td></tr>
+    <tr><td>完整错误链</td><td><code>--debug</code> 或 <code>MULTICA_DEBUG=1</code></td></tr>
+    <tr><td>请求超时</td><td><code>MULTICA_HTTP_TIMEOUT=60s</code>（默认 30 秒；接受 <code>45s</code> 或 <code>45</code>）</td></tr>
+    <tr><td>技能下载无进展超时</td><td><code>MULTICA_HTTP_STALL_TIMEOUT=45s</code>（默认 15 秒无字节即失败，整体上限 10 分钟）</td></tr>
+    <tr><td>中文报错</td><td>检测到 <code>LC_ALL</code> / <code>LC_MESSAGES</code> / <code>LANG</code> 为中文即切换，无需参数</td></tr>
+  </tbody>
+</table>
+
+<h2>daemon 环境变量</h2>
+
+<table>
+  <thead><tr><th>变量</th><th>默认</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_SERVER_URL</code></td><td><code>ws://localhost:8080/ws</code></td><td>服务端地址</td></tr>
+    <tr><td><code>MULTICA_DAEMON_POLL_INTERVAL</code></td><td><code>30s</code></td><td>轮询兜底（WebSocket 唤醒会更快）</td></tr>
+    <tr><td><code>MULTICA_DAEMON_WS_CLAIM_POLL_INTERVAL</code></td><td><code>3m</code></td><td>WebSocket 健康时的领取轮询上限（含向下抖动）</td></tr>
+    <tr><td><code>MULTICA_DAEMON_HEARTBEAT_INTERVAL</code></td><td><code>15s</code></td><td>心跳</td></tr>
+    <tr><td><code>MULTICA_DAEMON_MAX_CONCURRENT_TASKS</code></td><td><code>20</code></td><td>单 daemon 并发上限</td></tr>
+    <tr><td><code>MULTICA_DAEMON_ID</code></td><td>主机名</td><td>守护进程标识</td></tr>
+    <tr><td><code>MULTICA_DAEMON_DEVICE_NAME</code></td><td>主机名</td><td>设备显示名</td></tr>
+    <tr><td><code>MULTICA_AGENT_RUNTIME_NAME</code></td><td><code>Local Agent</code></td><td>Runtime 显示名</td></tr>
+    <tr><td><code>MULTICA_WORKSPACES_ROOT</code></td><td><code>~/multica_workspaces</code></td><td>本机工作目录根</td></tr>
+    <tr><td><code>MULTICA_KEEP_ENV_AFTER_TASK</code></td><td>—</td><td>设 <code>true</code>/<code>1</code> 则任务结束后保留环境目录</td></tr>
+  </tbody>
+</table>
+
+<h2>看门狗与超时</h2>
+
+<table>
+  <thead><tr><th>变量</th><th>默认</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_AGENT_TIMEOUT</code></td><td><code>0</code>（不限）</td></tr>
+    <tr><td><code>MULTICA_AGENT_IDLE_WATCHDOG</code></td><td><code>2h</code>（<code>0</code> 关闭整套看门狗）</td></tr>
+    <tr><td><code>MULTICA_AGENT_TOOL_WATCHDOG</code></td><td>同 idle（<code>0</code> = 工具调用中永不强停）</td></tr>
+    <tr><td><code>MULTICA_OPENCODE_IDLE_WATCHDOG</code></td><td><code>10m</code></td></tr>
+    <tr><td><code>MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT</code></td><td>同 idle</td></tr>
+    <tr><td><code>MULTICA_CODEX_HANDSHAKE_TIMEOUT</code></td><td><code>30s</code>（<code>thread/start</code> 与 <code>thread/resume</code> 为 <code>60s</code>）</td></tr>
+    <tr><td><code>MULTICA_CODEX_TURN_INTERRUPT_TIMEOUT</code></td><td><code>2s</code></td></tr>
+    <tr><td><code>MULTICA_CODEX_FIRST_TURN_TIMEOUT</code></td><td><code>0</code>（保留内建 60s 上限）</td></tr>
+  </tbody>
+</table>
+
+<h2>垃圾回收</h2>
+
+<table>
+  <thead><tr><th>变量</th><th>默认</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_GC_ENABLED</code></td><td><code>true</code></td></tr>
+    <tr><td><code>MULTICA_GC_INTERVAL</code></td><td><code>2h</code></td></tr>
+    <tr><td><code>MULTICA_GC_TTL</code>（issue 已 done/cancelled）</td><td><code>24h</code></td></tr>
+    <tr><td><code>MULTICA_GC_COMPLETED_TASK_TTL</code></td><td>云 <code>14d</code>；自部署 <code>0</code>（禁用）</td></tr>
+    <tr><td><code>MULTICA_GC_ORPHAN_TTL</code></td><td><code>72h</code></td></tr>
+    <tr><td><code>MULTICA_GC_ARTIFACT_TTL</code></td><td><code>12h</code>（<code>0</code> 禁用）</td></tr>
+    <tr><td><code>MULTICA_GC_ARTIFACT_PATTERNS</code></td><td><code>node_modules,.next,.turbo</code>（仅匹配目录名，<code>.git</code> 内不下探）</td></tr>
+    <tr><td><code>MULTICA_GC_REPO_TTL</code></td><td><code>720h</code>（30d）</td></tr>
+    <tr><td><code>MULTICA_GC_REPO_MAINTENANCE_ENABLED</code></td><td><code>true</code>（<code>false</code> 只关重型 Git 维护）</td></tr>
+    <tr><td><code>MULTICA_GC_HERMES_MEMORY_TTL</code></td><td><code>2160h</code>（90d）</td></tr>
+    <tr><td><code>MULTICA_GC_HERMES_SESSION_TTL</code></td><td><code>336h</code>（14d）</td></tr>
+    <tr><td><code>MULTICA_GC_TASK_TEMP_LEGACY_TTL</code></td><td><code>0</code>（禁用；只有在确认没有旧版 daemon 在跑时才设值）</td></tr>
+  </tbody>
+</table>
+
+<h2>自更新与重载</h2>
+
+<table>
+  <thead><tr><th>变量</th><th>默认</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_DAEMON_AUTO_UPDATE</code></td><td>官方云为开，自部署默认关</td><td>向 GitHub Releases 查新版</td></tr>
+    <tr><td><code>MULTICA_DAEMON_AUTO_UPDATE_INTERVAL</code></td><td><code>6h</code></td><td>检查间隔</td></tr>
+    <tr><td><code>MULTICA_DAEMON_AUTO_RELOAD</code></td><td><code>true</code>（桌面端管理的 daemon 忽略）</td><td>跟随"被替换的二进制"重启（等当前任务结束）</td></tr>
+    <tr><td><code>MULTICA_RELEASE_API_BASE_URL</code></td><td>—</td><td>自部署的 release 元数据镜像</td></tr>
+    <tr><td><code>MULTICA_RELEASE_DOWNLOAD_BASE_URL</code></td><td>—</td><td>自部署的构件镜像</td></tr>
+  </tbody>
+</table>
+
+<h2>Makefile 目标</h2>
+
+<table>
+  <thead><tr><th>目标</th><th>做什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>make help</code></td><td>列出全部目标与说明（就是本文档的命令来源）</td></tr>
+    <tr><td><code>make selfhost</code> / <code>selfhost-build</code> / <code>selfhost-stop</code></td><td>自部署栈：用官方镜像 / 从当前 checkout 构建 / 停止</td></tr>
+    <tr><td><code>make setup</code></td><td>装依赖、确保数据库、跑迁移</td></tr>
+    <tr><td><code>make start</code> / <code>stop</code></td><td>起 / 停当前 checkout 的后端与前端</td></tr>
+    <tr><td><code>make status</code> / <code>list</code></td><td>看当前环境 / 列出机器上所有开发环境</td></tr>
+    <tr><td><code>make down</code> / <code>destroy</code></td><td>停但保留数据 / 删库删 profile 释放槽位</td></tr>
+    <tr><td><code>make gc</code></td><td>回收目录已消失或 TTL 过期的环境</td></tr>
+    <tr><td><code>make check</code></td><td>typecheck + TS 测试 + Go 测试 + Playwright E2E</td></tr>
+    <tr><td><code>make db-up</code> / <code>db-down</code> / <code>db-reset</code> / <code>db-drop</code></td><td>共享 PostgreSQL 容器与当前环境数据库操作</td></tr>
+    <tr><td><code>make worktree-env</code></td><td>为 worktree 生成唯一库名与端口的 <code>.env.worktree</code></td></tr>
+    <tr><td><code>make api-dev</code> / <code>web-dev</code> / <code>desktop-dev</code></td><td>只起其中一部分</td></tr>
+    <tr><td><code>make env-exec ARGS="-- ..."</code></td><td>用本环境的变量跑任意命令</td></tr>
+    <tr><td><code>make sqlc</code></td><td>改 SQL 后重新生成</td></tr>
+  </tbody>
+</table>
+
+<h2>本机工作目录布局</h2>
+
+<pre><code>~/.multica/                       # 默认 profile 的状态目录
+├─ daemon.log                     # 日志
+├─ daemon.err.log                 # 启动/崩溃输出
+├─ daemon.pid                     # 后台进程 PID
+└─ profiles/&lt;name&gt;/               # 命名 profile 的同名文件 + 独立配置/端口/工作区根
+
+~/multica_workspaces/             # 各任务的隔离工作目录（可由 MULTICA_WORKSPACES_ROOT 改）</code></pre>
+
+<div class="lesson-nav">
+  <a href="03-run-states.html">← Run 状态与失败原因</a>
+  <a href="05-diagram-index.html">图表索引 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

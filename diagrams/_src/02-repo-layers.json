@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Multica 仓库分层与依赖方向",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 800],
+    "views": [
+      { "id": "apps-to-views", "label": "应用层如何复用共享页面", "focus": ["web", "desktop", "views"], "note": "Web 与 Desktop 都从同一套 packages/views 页面起步，路由和平台能力留在各自应用里。" },
+      { "id": "views-to-foundation", "label": "共享页面的两个下游", "focus": ["views", "ui", "core"], "note": "views 同时依赖 ui（无业务逻辑的组件）和 core（API、查询、store）。" },
+      { "id": "mobile-and-server", "label": "Mobile 与 Go 服务", "focus": ["mobile", "core", "server", "docs"], "note": "Mobile 只复用 core 的类型与纯函数；core 里的 ApiClient 才是真正调用 Go 服务的边界。" }
+    ]
+  },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "@multica/web", "sublabel": "apps/web · Next.js 路由与平台适配", "pos": [100, 70], "size": [200, 76] },
+    { "id": "desktop", "type": "frontend", "label": "@multica/desktop", "sublabel": "apps/desktop · Electron 主进程与标签页", "pos": [340, 70], "size": [200, 76] },
+    { "id": "mobile", "type": "frontend", "label": "@multica/mobile", "sublabel": "apps/mobile · Expo 独立客户端", "pos": [620, 70], "size": [200, 76] },
+    { "id": "docs", "type": "frontend", "label": "@multica/docs", "sublabel": "apps/docs · Fumadocs 文档站", "pos": [880, 70], "size": [200, 76], "tag": "不依赖 core/ui" },
+    { "id": "views", "type": "frontend", "label": "@multica/views", "sublabel": "Web 与 Desktop 共用的业务页面与组件", "pos": [100, 260], "size": [420, 86], "tag": "packages/views" },
+    { "id": "ui", "type": "frontend", "label": "@multica/ui", "sublabel": "不含业务逻辑的基础组件与样式 token", "pos": [80, 450], "size": [220, 80], "tag": "packages/ui" },
+    { "id": "core", "type": "backend", "label": "@multica/core", "sublabel": "API client · TanStack Query · Zustand · 类型", "pos": [360, 450], "size": [400, 80], "tag": "packages/core" },
+    { "id": "server", "type": "backend", "label": "server/", "sublabel": "Go · Chi · sqlc · WebSocket", "pos": [360, 640], "size": [400, 80], "tag": "独立 Go module" }
+  ],
+  "connections": [
+    { "id": "web-views", "from": "web", "to": "views", "label": "引入 @multica/views", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "desktop-views", "from": "desktop", "to": "views", "label": "引入 @multica/views", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "views-ui", "from": "views", "to": "ui", "label": "引入基础组件", "fromSide": "bottom", "toSide": "top" },
+    { "id": "views-core", "from": "views", "to": "core", "label": "引入 API hooks 与类型", "fromSide": "bottom", "toSide": "top" },
+    { "id": "mobile-core", "from": "mobile", "to": "core", "label": "只复用类型与纯函数，自带 UI", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "core-server", "from": "core", "to": "server", "label": "运行时：ApiClient 调 REST + WebSocket", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "依赖方向是硬约束", "items": ["views → core + ui；core 与 ui 互不依赖", "共享包直接导出 .ts / .tsx 源文件，由使用方编译", "lint 用 no-extraneous-dependencies 挡住幻影依赖"] },
+    { "dot": "emerald", "title": "平台能力必须留在应用层", "items": ["共享页面通过 NavigationAdapter 导航，不 import next/*", "core 不碰 localStorage，持久化走 StorageAdapter 注入", "Electron IPC、cookie 等只在 apps/ 内使用"] },
+    { "dot": "amber", "title": "Mobile 是有意的例外", "items": ["不复用 views/ui，也不复用 query key 与 store", "只共享 core 的类型与平台无关 schema", "好处是发布节奏与 Web 解耦，代价是部分逻辑双写"] }
+  ]
+}

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · Run 状态与失败原因 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 速查文档 3 / 5</p>
+<p class="kicker">Reference 03</p>
+<h1>Run 状态与失败原因</h1>
+<p class="deck">任务卡住或失败时对照这张表。原则：<strong>先看停在哪个状态，再走对应分支</strong>——不要从故障清单第一条开始逐条试。</p>
+<div class="meta"><span>约 6 分钟</span><span>对应课程：0005、0006、0007、0014</span></div>
+
+<h2>状态全集</h2>
+
+<table>
+  <thead><tr><th>状态</th><th>含义</th><th>谁推进它</th><th>是否终态</th></tr></thead>
+  <tbody>
+    <tr><td><code>deferred</code></td><td>已创建但未到 <code>fire_at</code>，完全不动</td><td>调度器到点 → <code>queued</code></td><td>否</td></tr>
+    <tr><td><code>queued</code></td><td>在队列里等 Runtime 认领</td><td>daemon 认领 → <code>dispatched</code></td><td>否</td></tr>
+    <tr><td><code>dispatched</code></td><td>已被认领，凭据已签发，CLI 未起</td><td>daemon 启动 CLI → <code>running</code>；目录被占 → <code>waiting_local_directory</code></td><td>否</td></tr>
+    <tr><td><code>waiting_local_directory</code></td><td>目标本地目录被另一条在途运行占用</td><td>目录释放 → <code>running</code></td><td>否</td></tr>
+    <tr><td><code>running</code></td><td>Agent CLI 进程在跑</td><td>进程结束 → <code>completed</code> / <code>failed</code></td><td>否</td></tr>
+    <tr><td><code>completed</code></td><td>正常结束，交回评审</td><td>—</td><td>是</td></tr>
+    <tr><td><code>failed</code></td><td>出错结束，带错误信息</td><td>—</td><td>是</td></tr>
+    <tr><td><code>cancelled</code></td><td>被人或系统取消</td><td>—</td><td>是（<strong>可从任意状态进入</strong>）</td></tr>
+  </tbody>
+</table>
+
+<p>创建时的分叉规则：<code>CASE WHEN fire_at IS NOT NULL THEN 'deferred' ELSE 'queued' END</code>（<code>pkg/db/queries/agent.sql</code>）。</p>
+
+<h2>状态 → 事件 → 下一步</h2>
+
+<table>
+  <thead><tr><th>事件</th><th>转移</th></tr></thead>
+  <tbody>
+    <tr><td><code>task:queued</code></td><td>∅ → <code>queued</code>（入队 / 重试创建）</td></tr>
+    <tr><td><code>task:dispatch</code></td><td><code>queued</code> → <code>dispatched</code>（daemon 认领）</td></tr>
+    <tr><td><code>task:running</code></td><td><code>dispatched</code> → <code>running</code>（daemon 已启动）</td></tr>
+    <tr><td><code>task:waiting_local_directory</code></td><td><code>dispatched</code> → <code>waiting_local_directory</code></td></tr>
+    <tr><td><code>task:progress</code></td><td>过程上报，<strong>不改状态</strong></td></tr>
+    <tr><td><code>task:completed</code> / <code>task:failed</code></td><td><code>running</code> → 终态</td></tr>
+    <tr><td><code>task:cancelled</code></td><td>任意状态 → <code>cancelled</code></td></tr>
+  </tbody>
+</table>
+
+<h2>停在非终态：分诊表</h2>
+
+<table>
+  <thead><tr><th>停在</th><th>含义</th><th>依次检查</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>queued</code></td>
+      <td>没有运行时来领</td>
+      <td>
+        1. 绑定的 Runtime 是否在线<br>
+        2. Runtime 是否检测到该 Agent 配置的工具<br>
+        3. Agent 是否还有并发额度（<strong>默认 6</strong>）<br>
+        4. daemon 是否还有全局容量（<strong>默认 20</strong>）
+      </td>
+    </tr>
+    <tr>
+      <td><code>dispatched</code></td>
+      <td>认领了但没走到"开始"</td>
+      <td>daemon 是否中途崩溃 / 网络断开；看 daemon 日志与 <code>GetTaskStatus</code> 记录</td>
+    </tr>
+    <tr>
+      <td><code>waiting_local_directory</code></td>
+      <td>同一本地目录被占用</td>
+      <td>
+        等前一条结束；或把项目资源切到 <code>worktree</code> 模式（并行，无队列）；<br>
+        互斥是 daemon <strong>内存态</strong>，要释放就 <code>multica daemon restart</code>——<strong>没有锁文件可删</strong>
+      </td>
+    </tr>
+    <tr>
+      <td><code>running</code> 但无产出</td>
+      <td>工具起了但没进展</td>
+      <td>
+        工具是否已登录 / key 与额度 / 模型与思考级别是否被支持 / 目录是否存在可写 / 自定义参数是否有效；<br>
+        最快验证：在<strong>执行那台机器</strong>上手工运行同一工具
+      </td>
+    </tr>
+    <tr>
+      <td><code>deferred</code> 一直不动</td>
+      <td>未到点</td>
+      <td>看它的 <code>fire_at</code>；这不是故障</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">重要澄清</span>
+<p><strong>"排队久"本身不是故障。</strong>运行时离线时运行会<em>继续排队</em>；只有该运行时心跳缺席超过重连宽限期、<strong>并且这条运行自己也已等满这么久</strong>才会失败。所以长队列不会因等太久被判失败，指派给已离线机器也仍留有一个完整宽限期把它唤醒。</p>
+</div>
+
+<h2>失败：去哪儿找原因</h2>
+
+<table>
+  <thead><tr><th>线索</th><th>在哪</th></tr></thead>
+  <tbody>
+    <tr><td>Run 的失败原因字段</td><td>Run 详情 / <code>multica issue runs &lt;issue-id&gt;</code></td></tr>
+    <tr><td>运行的完整消息流（工具调用、思考、错误）</td><td><code>multica issue run-messages &lt;task-id&gt;</code>（可用 <code>--since</code> 增量拉）</td></tr>
+    <tr><td>daemon 侧现场</td><td><code>multica daemon logs --lines 100</code></td></tr>
+    <tr><td>daemon 启动过程</td><td><code>multica daemon start --foreground</code></td></tr>
+    <tr><td>失败归类逻辑</td><td><code>server/pkg/taskfailure/</code></td></tr>
+    <tr><td>后端日志（自部署）</td><td><code>docker compose -f docker-compose.selfhost.yml logs -f backend</code></td></tr>
+  </tbody>
+</table>
+
+<h2>相关超时参数</h2>
+
+<table>
+  <thead><tr><th>参数</th><th>默认</th><th>管什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>MULTICA_AGENT_TIMEOUT</code></td><td><code>0</code>（不限）</td><td>整条任务的硬超时</td></tr>
+    <tr><td><code>MULTICA_AGENT_IDLE_WATCHDOG</code></td><td><code>2h</code></td><td>长时间无活动判定为卡死（<code>0</code> 关闭整套看门狗）</td></tr>
+    <tr><td><code>MULTICA_AGENT_TOOL_WATCHDOG</code></td><td>同 idle</td><td>工具调用期间的总预算（<code>0</code> = 工具调用中永不强停）</td></tr>
+    <tr><td><code>MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT</code></td><td>同 idle</td><td>Codex 的语义不活跃（它的定时器不看工具）</td></tr>
+    <tr><td><code>MULTICA_OPENCODE_IDLE_WATCHDOG</code></td><td><code>10m</code></td><td>OpenCode 专属空闲判定（<code>0</code> 回落到通用看门狗，不能延长）</td></tr>
+    <tr><td><code>MULTICA_DAEMON_HEARTBEAT_INTERVAL</code></td><td><code>15s</code></td><td>心跳；服务端据此判断 Runtime 在线</td></tr>
+    <tr><td>Agent 并发额度</td><td><code>6</code></td><td>单 Agent 同时执行上限</td></tr>
+    <tr><td><code>MULTICA_DAEMON_MAX_CONCURRENT_TASKS</code></td><td><code>20</code></td><td>单 daemon 同时执行上限</td></tr>
+  </tbody>
+</table>
+
+<div class="lesson-nav">
+  <a href="02-code-map.html">← 代码地图</a>
+  <a href="04-commands-env.html">命令与环境变量 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

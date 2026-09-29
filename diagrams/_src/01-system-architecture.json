@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Multica 系统架构总览",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 820],
+    "views": [
+      { "id": "client-to-api", "label": "客户端接入", "focus": ["web", "desktop", "mobile", "cli", "api"], "note": "四种客户端都通过同一套 HTTP + WebSocket 契约接入 Go backend。" },
+      { "id": "server-side", "label": "服务端与数据层", "focus": ["api", "pg", "redis"], "note": "PostgreSQL 是唯一权威数据源，Redis 只做跨副本实时中继。" },
+      { "id": "daemon-path", "label": "本机执行链路", "focus": ["api", "daemon", "agentcli"], "note": "守护进程用长连接领取 Run，再 spawn 本机已登录的 AI 编码工具。" }
+    ]
+  },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "Web 客户端", "sublabel": "apps/web", "pos": [60, 70], "size": [200, 74], "tag": "Next.js 16" },
+    { "id": "desktop", "type": "frontend", "label": "Desktop 客户端", "sublabel": "apps/desktop", "pos": [300, 70], "size": [200, 74], "tag": "Electron" },
+    { "id": "mobile", "type": "frontend", "label": "Mobile 客户端", "sublabel": "apps/mobile", "pos": [540, 70], "size": [200, 74], "tag": "Expo / RN" },
+    { "id": "api", "type": "backend", "label": "Go backend", "sublabel": "server/cmd/server · Chi + sqlc", "pos": [60, 260], "size": [680, 110], "tag": "REST + 双 WebSocket" },
+    { "id": "pg", "type": "database", "label": "PostgreSQL 17", "sublabel": "工作区 · Issue · Run · 用量", "pos": [860, 200], "size": [200, 76], "tag": "唯一事实源" },
+    { "id": "redis", "type": "database", "label": "Redis（可选）", "sublabel": "跨副本实时事件中继", "pos": [860, 340], "size": [200, 76], "tag": "Streams" },
+    { "id": "cli", "type": "external", "label": "multica CLI", "sublabel": "server/cmd/multica", "pos": [420, 470], "size": [220, 80], "tag": "cobra" },
+    { "id": "daemon", "type": "backend", "label": "Agent daemon", "sublabel": "server/internal/daemon", "pos": [60, 470], "size": [300, 96], "tag": "轮询 + WS 唤醒" },
+    { "id": "agentcli", "type": "external", "label": "AI 编码工具 CLI", "sublabel": "你已安装并登录的本机工具", "pos": [60, 640], "size": [300, 80], "tag": "26 种 provider" }
+  ],
+  "connections": [
+    { "id": "web-api", "from": "web", "to": "api", "label": "HTTPS + WebSocket", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "desktop-api", "from": "desktop", "to": "api", "label": "HTTPS + WS", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "mobile-api", "from": "mobile", "to": "api", "label": "HTTPS + WS", "fromSide": "bottom", "toSide": "top" },
+    { "id": "cli-api", "from": "cli", "to": "api", "label": "REST + WS", "fromSide": "top", "toSide": "bottom" },
+    { "id": "api-pg", "from": "api", "to": "pg", "label": "SQL（sqlc 生成）", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "api-redis", "from": "api", "to": "redis", "label": "发布实时事件", "variant": "dashed", "fromSide": "right", "toSide": "left" },
+    { "id": "daemon-api", "from": "daemon", "to": "api", "label": "daemon WS 长连接 · 领取 Run", "variant": "emphasis", "fromSide": "top", "toSide": "bottom" },
+    { "id": "daemon-agentcli", "from": "daemon", "to": "agentcli", "label": "spawn 子进程 + 回传流式事件", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 34 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "四种客户端，一套契约", "items": ["Web / Desktop / Mobile / CLI 共用同一份 REST 与 WebSocket 接口", "Web 与 Desktop 共享 packages/core、ui、views 三层代码", "Mobile 只复用 core 的类型与纯函数，自带 UI 与状态"] },
+    { "dot": "emerald", "title": "服务端只管协作，不下场执行", "items": ["PostgreSQL 保存工作区、Issue、Run 与用量，是唯一事实源", "Redis 未配置时退化为单实例进程内实现", "服务端不接触你的代码，只签发绑定 Run 的临时凭据"] },
+    { "dot": "amber", "title": "执行发生在你自己的机器上", "items": ["daemon 与 CLI 是同一个 Go 二进制，用长连接领取 Run", "真正干活的还是你已登录的 Claude Code、Codex 等 CLI", "代码不离开这台机器，Multica 只回传进度与结果"] }
+  ]
+}

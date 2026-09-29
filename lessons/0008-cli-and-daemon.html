@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0008 · CLI 与 daemon 是同一个二进制 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 8 课 / 共 14 课</p>
+<p class="kicker">Lesson 08</p>
+<h1>CLI 与 daemon：一个二进制，两副面孔</h1>
+<p class="deck">第 1 课留下的那个疑点现在来解：为什么 <code>.gitignore</code> 里既有 <code>server/daemon</code> 又有 <code>server/multica</code>？答案是它们本来就是同一个程序。这一课顺便把 CLI 变成你的脚本化入口。</p>
+<div class="meta">
+  <span>约 35 分钟</span>
+  <span>对应源码：server/cmd/multica/ · internal/cli/ · CLI_AND_DAEMON.md</span>
+  <span>前置：第 7 课（daemon）</span>
+</div>
+
+<h2>一、证据先摆出来</h2>
+
+<p><code>CLI_AND_DAEMON.md</code> 的第一句话就是答案：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>The multica CLI connects your local machine to Multica. It handles authentication, workspace management, issue tracking, and runs the agent daemon that executes AI tasks locally.</code></p>
+</div>
+
+<p>一个程序，两种用法：</p>
+
+<table>
+  <thead><tr><th>用法</th><th>命令形态</th><th>生命周期</th></tr></thead>
+  <tbody>
+    <tr><td>交互式 CLI</td><td><code>multica issue list</code>、<code>multica login</code></td><td>跑完即退</td></tr>
+    <tr><td>常驻 daemon</td><td><code>multica daemon start</code></td><td>后台长期存活</td></tr>
+  </tbody>
+</table>
+
+<p>这也解释了 <code>.gitignore</code> 里那几行看似重复的忽略项——它们是同一个 Go 二进制在不同构建产物路径下的名字。</p>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>代码位置：<code>server/cmd/multica/</code>。里面有一批 <code>cmd_*.go</code> 文件，每个对应一族子命令（<code>cmd_issue.go</code>、<code>cmd_workspace.go</code>……），daemon 相关逻辑则在 <code>server/internal/daemon/</code>。</p>
+<p>所以你在第 7 课读的 daemon 源码，和你会敲的 <code>multica</code> 命令，是同一个程序的两半。</p>
+</div>
+
+<h2>二、最短上手路径</h2>
+
+<pre><code># 一条命令搞定：写配置 + 浏览器登录 + 起 daemon
+multica setup            # 连官方云
+multica setup self-host  # 连自部署
+
+# 或者拆开来做
+multica login                     # 浏览器 OAuth，生成 90 天 PAT，自动加入你的工作区
+multica daemon start              # 后台起 daemon
+multica daemon status             # 看 PID、运行时长、检测到的 Agent、监听的工作区</code></pre>
+
+<p><code>multica login</code> 有个省事的副作用：它会<strong>自动发现你所属的全部工作区，并加进 daemon 的监听列表</strong>。所以第一次跑完通常不需要额外配置。</p>
+
+<p>无头环境（CI、服务器）用令牌登录：</p>
+
+<pre><code>multica login --token &lt;mul_...&gt;
+multica login --token=          # 交互式输入，令牌不进 shell 历史</code></pre>
+
+<h2>三、daemon 的日常操作命令</h2>
+
+<table>
+  <thead><tr><th>命令</th><th>用途</th><th>备注</th></tr></thead>
+  <tbody>
+    <tr><td><code>multica daemon start</code></td><td>起后台 daemon</td><td><code>--foreground</code> 前台跑，方便调试</td></tr>
+    <tr><td><code>multica daemon stop</code></td><td>停 daemon</td><td>退出时会注销全部 Runtime</td></tr>
+    <tr><td><code>multica daemon status</code></td><td>看状态</td><td><code>--output json</code> 便于脚本</td></tr>
+    <tr><td><code>multica daemon logs -f</code></td><td>看日志并跟踪</td><td>先打印它解析出的绝对路径，避免看错 profile</td></tr>
+    <tr><td><code>multica daemon disk-usage</code></td><td>看磁盘占用</td><td><code>.repos</code> 单独一行，不摊到各任务里</td></tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p><strong>"我的日志怎么是旧的？"</strong>——这是最常见的自伤。daemon 日志落在<em>它启动时那个 profile 的状态目录</em>里，默认 <code>~/.multica/</code>，带 <code>--profile</code> 时是 <code>~/.multica/profiles/&lt;name&gt;/</code>。桌面端用的是它自己的命名 profile。</p>
+<p>所以同一台机器上可能存在<strong>两份看起来都合理的 <code>daemon.log</code>，但只有一份在被写</strong>。<code>multica daemon logs</code> 每次都会打印它读的绝对路径——看那一行，别猜。</p>
+</div>
+
+<h2>四、Profiles：一台机器跑多个 daemon</h2>
+
+<p>Profile 是彻底隔离的单位：<strong>各自的配置目录、daemon 状态、健康检查端口、工作区根目录</strong>。</p>
+
+<pre><code># 生产用默认 profile，staging 用命名 profile
+multica setup self-host --profile staging --server-url https://api-staging.example.com
+multica daemon start --profile staging
+multica daemon status --profile staging     # 后续命令都要带上 --profile</code></pre>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>Profile ≈ Oracle 里给同一个客户端机器配多套 <code>TNS_ADMIN</code> 与 <code>tnsnames.ora</code>：一个连生产库，一个连测试库，凭据与默认目标互不干扰。</p>
+<p>区别是这里连<em>daemon 进程和端口</em>都分开，所以可以同时活着。</p>
+</div>
+
+<h2>五、命令怎么知道"操作哪个工作区"</h2>
+
+<p>每条命令只作用于一个工作区，解析优先级（从高到低）：</p>
+
+<ol>
+  <li>命令上的 <code>--workspace-id &lt;id&gt;</code> 参数</li>
+  <li>环境变量 <code>MULTICA_WORKSPACE_ID</code></li>
+  <li>当前 profile 里存的默认工作区（由 <code>multica login</code> 或 <code>workspace switch</code> 写入）</li>
+</ol>
+
+<p>写脚本时推荐用前两种——<strong>不留隐式状态，行为可复现</strong>。<code>multica config set workspace_id</code> 是低层写法，它会<em>跳过权限检查</em>直接写，所以日常切换用 <code>workspace switch</code>（先校验可访问再保存）。</p>
+
+<h2>六、脚本化实战：一条命令链</h2>
+
+<p>这是 MISSION 里"用脚本而不是手点界面"的具体形态：</p>
+
+<pre><code># 1. 建一个 Issue 并直接指派给某个 Agent
+multica issue create --title "修复登录页闪烁" \
+  --description "复现步骤见附件" \
+  --priority high --assignee "Lambda"
+
+# 2. 拿它的 KEY（形如 MUL-123）跟进后续操作
+multica issue list --status todo --assignee "Lambda" --output json
+
+# 3. 看这条 Issue 的全部执行记录
+multica issue runs MUL-123
+
+# 4. 只看还在跑的（queued / dispatched / running / waiting_local_directory）
+multica issue runs MUL-123 --active --output json
+
+# 5. 看某一次 Run 的详细消息流（工具调用、思考、错误）
+multica issue run-messages &lt;task-id&gt; --since 42 --output json
+
+# 6. 看这条 Issue 累计消耗
+multica issue usage MUL-123 --output json</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><code>--active</code> 这个开关就是第 5 课状态机的直接应用：它把"非终态"翻译成一句人能读懂的问题——<strong>"现在有 Agent 正在干这件事吗？"</strong></p>
+<p>源码里的原话是 <code>Instead of the full execution history. Answers "is an agent working on this right now"</code>。</p>
+</div>
+
+<h2>七、脚本友好性：JSON、退出码、调试开关</h2>
+
+<table>
+  <thead><tr><th>能力</th><th>用法</th></tr></thead>
+  <tbody>
+    <tr><td>结构化输出</td><td><code>--output json</code>（列表类默认 <code>table</code>）</td></tr>
+    <tr><td>字段裁剪</td><td><code>--fields=id,title,status,priority</code>（仅 JSON）</td></tr>
+    <tr><td>退出码分层</td><td><code>0</code> 成功／<code>1</code> 未分类／<code>2</code> 网络／<code>3</code> 认证授权／<code>4</code> 未找到／<code>5</code> 校验失败</td></tr>
+    <tr><td>原始错误链</td><td><code>--debug</code> 或 <code>MULTICA_DEBUG=1</code></td></tr>
+    <tr><td>请求超时</td><td><code>MULTICA_HTTP_TIMEOUT=60s</code>（默认 30 秒）</td></tr>
+    <tr><td>中文报错</td><td>检测到中文 locale 自动切换，无需参数</td></tr>
+  </tbody>
+</table>
+
+<p>退出码分层值得多看一眼，因为它让你能写出<em>有分支</em>的脚本：</p>
+
+<pre><code>multica issue get MUL-9999
+case $? in
+  0) echo "找到"; ;;
+  4) echo "这条 Issue 不存在，走建单流程"; ;;
+  3) echo "令牌过期了，需要重新 login"; ;;
+  2) echo "网络问题，稍后重试"; ;;
+esac</code></pre>
+
+<p>另外，CLI 把错误收敛在一个专门的翻译层里——源码是 <code>server/internal/cli/errors.go</code>。它的承诺是：<strong>默认只给你一句能照做的话，不泄漏 URL、状态行和内部调用链</strong>；需要细节时再加 <code>--debug</code>。</p>
+
+<h2>八、换了二进制会怎样（自动重载）</h2>
+
+<p>这是个容易被忽略但很实用的机制：CLI 启动的 daemon 会<strong>周期性比对自己的编译版本</strong>与"如果重新 exec 会启动的那个 <code>multica</code> 二进制"的 <code>--version</code>。不一致时（比如你跑了 <code>brew upgrade multica</code>、或本地 <code>make build</code>）：</p>
+
+<ol>
+  <li>等正在跑的任务结束——<strong>绝不中断运行中的任务</strong>；</li>
+  <li>然后重启进新二进制。</li>
+</ol>
+
+<p>如果 daemon 正忙，重启就推迟到下一次检查，<code>multica daemon status</code> 会说明它为什么还在旧版本上。想关掉这个行为：</p>
+
+<pre><code>MULTICA_DAEMON_AUTO_RELOAD=0 multica daemon start
+multica daemon start --no-auto-reload
+multica config set disable_auto_reload true</code></pre>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>两件容易混的事：<strong>「跟随二进制替换」</strong>与<strong>「向 GitHub 查询更新」</strong>是独立的两个机制。关掉自更新轮询，不会阻止 daemon 跟随你自己装的二进制。</p>
+<p>而 Agent CLI（<code>claude</code>、<code>codex</code>……）被就地升级时，处理方式又不同：daemon 会<strong>重新探测版本并重注册 Runtime，不重启自身</strong>——这样 Multica 的可用性就不取决于第三方 CLI 的发版节奏。</p>
+</div>
+
+<h2>九、检索练习</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对，同一个二进制：交互式子命令 + 常驻 daemon。"
+     data-no="回到 CLI_AND_DAEMON.md 的第一句话：它既做 CLI，也 runs the agent daemon。">
+  <p class="q">1. <code>multica</code> 与 daemon 是什么关系？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">两个独立程序，daemon 由 CLI 通过 HTTP 远程管理</button>
+    <button class="opt" data-key="b">同一个二进制：既能当交互式 CLI 用，也能作为常驻 daemon</button>
+    <button class="opt" data-key="c">daemon 是服务端组件，CLI 只是它的客户端外壳</button>
+    <button class="opt" data-key="d">CLI 属于前端包，daemon 属于 Go 后端，两者语言不同</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="c"
+     data-yes="正确。日志路径取决于启动时的 profile，且 logs 命令会打印实际路径。"
+     data-no="回想 Profile 那节：每个 profile 有自己的状态目录与日志。">
+  <p class="q">2. 你改了配置重启 daemon，但 <code>daemon.log</code> 看起来毫无变化。最有效的第一步是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">删掉 <code>~/.multica/daemon.log</code> 让 daemon 重建一份</button>
+    <button class="opt" data-key="b">重装 CLI，因为版本不匹配会导致日志写入失败</button>
+    <button class="opt" data-key="c">看 <code>multica daemon logs</code> 打印的绝对路径，确认是不是在看另一个 profile 的日志</button>
+    <button class="opt" data-key="d">把 daemon 日志级别调到 debug 再重启一次</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="对。退出码 3 表示认证/授权失败，脚本据此分支即可。"
+     data-no="看那张退出码表：401/403 对应哪个数字？">
+  <p class="q">3. 你的定时脚本调用 <code>multica issue list</code>，某天开始总是失败。想让它自动判断"是不是令牌过期了"，应该检查？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">解析 stderr 里的英文报错文本，匹配 timeout 关键字</button>
+    <button class="opt" data-key="b">检查 <code>--output json</code> 的响应体里有没有 error 字段</button>
+    <button class="opt" data-key="c">对比命令耗时，超时通常意味着令牌失效</button>
+    <button class="opt" data-key="d">看退出码是否等于 3，它专门表示认证/授权类失败</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，写出 CLI 决定"操作哪个工作区"的三级优先级，并说明脚本里为什么偏向用前两级。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><code>--workspace-id &lt;id&gt;</code> 命令参数（最高优先级）</li>
+      <li><code>MULTICA_WORKSPACE_ID</code> 环境变量</li>
+      <li>当前 profile 中保存的默认工作区（由 <code>login</code> 或 <code>workspace switch</code> 写入）</li>
+    </ol>
+    <p>脚本里偏向前两级，因为它们是<strong>调用时显式给出</strong>的：不依赖某个配置文件里存着什么，换机器、换 profile 行为都一样。第三级是隐式状态，人和脚本共用时会互相污染。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>CLI_AND_DAEMON.md</code>——全篇就是 CLI 与 daemon 的权威手册，尤其看 <em>Agent Daemon → How It Works</em>（5 步循环）与配置表。</p>
+  <p>辅助：<code>CLI_INSTALL.md</code>（安装与自更新镜像）；<code>server/cmd/multica/</code>（子命令实现）；<code>server/internal/cli/errors.go</code>（错误翻译层）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："daemon 支持哪 26 种 CLI、各自怎么启动？"——<code>CLI_AND_DAEMON.md</code> 里有一张完整表格（含 ACP 协议族与各家的特殊启动参数），需要时我们一起过一遍。</p>
+
+<div class="lesson-nav">
+  <a href="0007-daemon.html">← 0007 · daemon</a>
+  <a href="0009-realtime.html">0009 · 实时同步：两条 WebSocket 通道 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

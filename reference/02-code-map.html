@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 代码地图 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 速查文档 2 / 5</p>
+<p class="kicker">Reference 02</p>
+<h1>代码地图：按问题反查文件</h1>
+<p class="deck">用法：<strong>先在下表找到你的问题，再打开对应文件</strong>。所有路径都相对仓库根目录 <code>C:\coding\multica</code>。</p>
+<div class="meta"><span>约 8 分钟</span><span>对应课程：0003、0004</span></div>
+
+<h2>结构与边界</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>工程契约（分层、状态、迁移、UUID、桌面端、测试规则）</td><td><code>AGENTS.md</code></td></tr>
+    <tr><td>移动端专属规则</td><td><code>apps/mobile/AGENTS.md</code></td></tr>
+    <tr><td>各包职责与依赖方向</td><td><code>AGENTS.md</code> → <em>Sharing Rules and Package Boundaries</em></td></tr>
+    <tr><td>前端共享包清单</td><td><code>packages/</code> → <code>core</code> · <code>ui</code> · <code>views</code> · <code>plugin-sdk</code> · <code>tsconfig</code> · <code>eslint-config</code></td></tr>
+    <tr><td>应用清单</td><td><code>apps/</code> → <code>web</code> · <code>desktop</code> · <code>mobile</code> · <code>docs</code> · <code>ui-lab</code></td></tr>
+    <tr><td>后端全部子包</td><td><code>server/internal/</code>（43 个）与 <code>server/pkg/</code>（14 个）</td></tr>
+    <tr><td>可执行入口</td><td><code>server/cmd/</code> → <code>server</code> · <code>multica</code> · <code>migrate</code> · <code>maintenance</code> · 4 个 <code>backfill_*</code></td></tr>
+  </tbody>
+</table>
+
+<h2>HTTP 与鉴权</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>全部接口路径与路由分组</td><td><code>server/cmd/server/router.go</code>（唯一入口）</td></tr>
+    <tr><td>全局中间件链的顺序与理由</td><td>同上，文件顶部约 1400 行附近</td></tr>
+    <tr><td>认证 / daemon 认证 / 插件认证</td><td><code>internal/middleware/auth.go</code> · <code>daemon_auth.go</code> · <code>plugin_auth.go</code></td></tr>
+    <tr><td>角色准入（member vs owner/admin）</td><td>router.go 里的 <code>RequireWorkspaceMemberFromURL</code> / <code>RequireWorkspaceRoleFromURL</code> 分组</td></tr>
+    <tr><td>限流与安全响应头</td><td><code>internal/middleware/ratelimit.go</code> · <code>csp.go</code></td></tr>
+    <tr><td>保留 slug（新增全局路由要改）</td><td><code>internal/handler/reserved_slugs.json</code> → <code>packages/core/paths/reserved-slugs.ts</code></td></tr>
+    <tr><td>健康检查三类端点</td><td><code>router.go</code>：<code>/health</code> · <code>/readyz</code> · <code>/healthz</code> · <code>/health/realtime</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Run 与执行链路</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>Run 的业务主线</td><td><code>server/internal/service/task.go</code></td></tr>
+    <tr><td>Run 的状态与事件定义</td><td><code>server/pkg/protocol/events.go</code>（<code>task:*</code> 段落含状态转移注释）</td></tr>
+    <tr><td>创建 / 取消 / 查询 Run 的 SQL</td><td><code>server/pkg/db/queries/agent.sql</code> · <code>wakeup.sql</code> · <code>supplement.sql</code></td></tr>
+    <tr><td>daemon 领取 / 开始 / 完成 / 失败的服务端侧</td><td><code>server/internal/handler/daemon.go</code></td></tr>
+    <tr><td>运行令牌的签发与校验</td><td><code>server/internal/auth/jwt.go</code> · <code>pkg/db/queries/task_token.sql</code></td></tr>
+    <tr><td>用量统计</td><td><code>pkg/db/queries/task_usage.sql</code> · <code>internal/taskusagebackfill/</code></td></tr>
+    <tr><td>失败原因归类</td><td><code>server/pkg/taskfailure/</code></td></tr>
+  </tbody>
+</table>
+
+<h2>daemon 与 Agent 适配</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>daemon 主体、启动序列、spawn</td><td><code>server/internal/daemon/daemon.go</code></td></tr>
+    <tr><td>节奏与阈值（全部默认值）</td><td><code>server/internal/daemon/config.go</code> 顶部的 <code>Default*</code> 常量块</td></tr>
+    <tr><td>daemon ↔ 服务端的 HTTP 客户端</td><td><code>server/internal/daemon/client.go</code></td></tr>
+    <tr><td>Agent CLI 适配接口与各 provider</td><td><code>server/pkg/agent/agent.go</code>（接口）+ 每 provider 一个文件</td></tr>
+    <tr><td>本机工作目录根</td><td><code>MULTICA_WORKSPACES_ROOT</code>（默认 <code>~/multica_workspaces</code>）</td></tr>
+    <tr><td>受支持的 CLI 名字清单</td><td><code>scripts/agent-cli-command-names.txt</code>；说明见 <code>CLI_AND_DAEMON.md</code></td></tr>
+  </tbody>
+</table>
+
+<h2>实时与调度</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>人类通道（<code>/ws</code>）</td><td><code>server/internal/realtime/hub.go</code> · <code>broadcaster.go</code></td></tr>
+    <tr><td>实时层水平扩展 / 跨实例转发</td><td><code>realtime/redis_relay.go</code> · <code>sharded_stream_relay.go</code> · <code>stream_retention.go</code></td></tr>
+    <tr><td>daemon 通道（<code>/api/daemon/ws</code>）</td><td><code>server/internal/daemonws/hub.go</code> · <code>notifier.go</code></td></tr>
+    <tr><td>前端怎么消费事件</td><td><code>packages/core/realtime/use-realtime-sync.ts</code></td></tr>
+    <tr><td>调度器与 cron 作业</td><td><code>server/internal/scheduler/</code></td></tr>
+  </tbody>
+</table>
+
+<h2>数据库</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>表结构变更（DDL）</td><td><code>server/migrations/</code>（589 组 up/down）</td></tr>
+    <tr><td>迁移 runner 的工程约定与运维处方</td><td><code>server/cmd/migrate/README.md</code>（含可照抄的 SQL）</td></tr>
+    <tr><td>runner 实现</td><td><code>server/cmd/migrate/main.go</code> · <code>internal/migrations/migrations.go</code></td></tr>
+    <tr><td>手写 SQL（DML）</td><td><code>server/pkg/db/queries/</code>（65 个 <code>.sql</code>）</td></tr>
+    <tr><td>sqlc 生成物</td><td><code>server/pkg/db/generated/</code>（改 SQL 后 <code>make sqlc</code>）</td></tr>
+  </tbody>
+</table>
+
+<h2>前端</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>API 边界与响应校验</td><td><code>packages/core/api/client.ts</code> · <code>packages/core/api/schema.ts</code></td></tr>
+    <tr><td>各领域的状态与 hooks</td><td><code>packages/core/</code> 下同名目录：<code>issues/</code> · <code>agents/</code> · <code>runtimes/</code> · <code>skills/</code> · <code>squads/</code> · <code>inbox/</code> · <code>projects/</code> …</td></tr>
+    <tr><td>UI 原语与设计令牌</td><td><code>packages/ui/components/ui/</code> · <code>packages/ui/styles/tokens.css</code></td></tr>
+    <tr><td>共用页面与业务组件</td><td><code>packages/views/</code></td></tr>
+    <tr><td>Web 平台适配</td><td><code>apps/web/platform/navigation.tsx</code></td></tr>
+    <tr><td>桌面端平台适配</td><td><code>apps/desktop/src/renderer/src/platform/</code></td></tr>
+    <tr><td>组件契约文档</td><td><code>packages/ui/docs/button.md</code> · <code>dialog.md</code></td></tr>
+  </tbody>
+</table>
+
+<h2>集成与插件</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>集成全集</td><td><code>server/internal/integrations/</code> → <code>channel</code> · <code>composio</code> · <code>dingtalk</code> · <code>ghsnapshot</code> · <code>lark</code> · <code>slack</code> · <code>telegram</code> · <code>vcs</code> · <code>wecom</code></td></tr>
+    <tr><td>插件公开契约</td><td><code>server/pkg/plugincontract/manifest.go</code>（三种关系与 scope 都在注释里）</td></tr>
+    <tr><td>插件能力清单</td><td><code>server/pkg/plugincontract/capabilities.go</code></td></tr>
+    <tr><td>插件 SDK（TS）</td><td><code>packages/plugin-sdk/index.ts</code> · <code>protocol.ts</code></td></tr>
+    <tr><td>插件服务端实现</td><td><code>server/internal/service/plugin*.go</code>（十几个文件，文件名即能力地图）</td></tr>
+    <tr><td>webhook 入口</td><td><code>router.go</code>：<code>/api/webhooks/github</code> · <code>/api/webhooks/vcs/{connectionId}</code> · <code>/api/webhooks/autopilots/{token}</code></td></tr>
+  </tbody>
+</table>
+
+<h2>构建、运行、验证</h2>
+
+<table>
+  <thead><tr><th>想知道什么</th><th>去哪看</th></tr></thead>
+  <tbody>
+    <tr><td>所有 make 目标</td><td><code>Makefile</code>（或直接 <code>make help</code>）</td></tr>
+    <tr><td>自部署三级文档</td><td><code>SELF_HOSTING.md</code> · <code>SELF_HOSTING_ADVANCED.md</code> · <code>SELF_HOSTING_AI.md</code></td></tr>
+    <tr><td>K8s 部署</td><td><code>deploy/helm/multica/</code></td></tr>
+    <tr><td>环境变量全集</td><td><code>apps/docs/content/docs/environment-variables.zh.mdx</code></td></tr>
+    <tr><td>本地开发与 worktree</td><td><code>CONTRIBUTING.md</code></td></tr>
+    <tr><td>CLI 错误翻译层</td><td><code>server/internal/cli/errors.go</code></td></tr>
+  </tbody>
+</table>
+
+<div class="lesson-nav">
+  <a href="01-glossary.html">← 术语表</a>
+  <a href="03-run-states.html">Run 状态与失败原因 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

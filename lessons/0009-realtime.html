@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0009 · 实时同步：两条 WebSocket 通道 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 9 课 / 共 14 课</p>
+<p class="kicker">Lesson 09</p>
+<h1>实时同步：两条 WebSocket 通道</h1>
+<p class="deck">为什么你在界面上能眼看着 Agent 一步步干活？因为有一整套事件系统。这一课讲清两条通道的分工、事件的命名与粒度，以及前端收到事件之后到底改了什么。</p>
+<div class="meta">
+  <span>约 35 分钟</span>
+  <span>对应图表：06 实时事件数据流</span>
+  <span>对应源码：pkg/protocol/events.go · internal/realtime/ · internal/daemonws/ · packages/core/realtime/</span>
+</div>
+
+<h2>一、两条通道，两种用户</h2>
+
+<p>Multica 的实时层是<strong>两套独立系统</strong>，不要混着理解：</p>
+
+<table>
+  <thead><tr><th></th><th>通道 A：<code>/ws</code></th><th>通道 B：<code>/api/daemon/ws</code></th></tr></thead>
+  <tbody>
+    <tr><td>连接者</td><td><strong>人</strong>用的客户端（Web / 桌面端）</td><td><strong>daemon</strong>（机器）</td></tr>
+    <tr><td>代码位置</td><td><code>server/internal/realtime/</code></td><td><code>server/internal/daemonws/</code></td></tr>
+    <tr><td>鉴权</td><td>会话 Cookie 或 PAT + 成员校验</td><td><code>middleware.DaemonAuth</code>（只认 daemon 令牌）</td></tr>
+    <tr><td>语义</td><td><strong>广播</strong>：把变更推给关心它的人</td><td><strong>双向 RPC</strong>：服务端还会反过来请求 daemon 做事</td></tr>
+    <tr><td>典型消息</td><td><code>issue:updated</code>、<code>task:running</code>、<code>inbox:new</code></td><td>"这个 Runtime 有可领的任务了"、模型列表查询、插件钩子调用</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>通道 A 的成员校验由三样东西完成：<code>membershipChecker</code>（你是不是这个工作区的人）、<code>patResolver</code>（PAT 解析）、<code>slugResolver</code>（把工作区 slug 换成 UUID）。这三者都定义在 <code>router.go</code> 里、创建时传给 <code>realtime.HandleWebSocket</code>。</p>
+<p>也就是说：<strong>WebSocket 不是"连上就完事"的免检通道，它自带一套自己的准入。</strong></p>
+</div>
+
+<h2>二、事件的命名空间</h2>
+
+<p>所有事件常量集中在 <code>server/pkg/protocol/events.go</code>，按领域分组、冒号分隔：</p>
+
+<table>
+  <thead><tr><th>前缀</th><th>代表事件</th></tr></thead>
+  <tbody>
+    <tr><td><code>issue:</code></td><td><code>issue:created</code> / <code>issue:updated</code> / <code>issue:deleted</code></td></tr>
+    <tr><td><code>comment:</code></td><td><code>comment:created</code> / <code>comment:resolved</code> / <code>reaction:added</code></td></tr>
+    <tr><td><code>agent:</code></td><td><code>agent:status</code> / <code>agent:created</code> / <code>agent:archived</code></td></tr>
+    <tr><td><code>task:</code></td><td><code>task:queued</code> / <code>task:dispatch</code> / <code>task:running</code> / <code>task:progress</code> / <code>task:completed</code> / <code>task:failed</code> / <code>task:cancelled</code></td></tr>
+    <tr><td><code>inbox:</code></td><td><code>inbox:new</code> / <code>inbox:read</code> / <code>inbox:archived</code></td></tr>
+    <tr><td><code>workspace:</code> <code>member:</code> <code>subscriber:</code> <code>skill:</code> <code>chat:</code></td><td>各自领域的增删改</td></tr>
+  </tbody>
+</table>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>冒号前缀就是<strong>点名空间下的层级键</strong>，等价于 Oracle 里用包名给过程分域：<code>PKG_ISSUE.CREATE</code>、<code>PKG_TASK.COMPLETE</code>。客户端可以只订阅 <code>task:</code> 这一族，不用逐个枚举。</p>
+</div>
+
+<h2>三、事件粒度：一句注释就讲透了</h2>
+
+<p>这里有个很容易被忽略但很值钱的设计判断。源码注释原文：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Each event maps to a status transition on agent_task_queue. Front-end subscribes by `task:` prefix and invalidates the workspace task snapshot, so the granularity here is "what does the user want to see change" — not "every internal status flip".</code></p>
+</div>
+
+<p>翻译：<strong>事件的粒度是按"用户想看到什么变化"设计的，不是按"内部状态变了多少次"设计的。</strong></p>
+
+<p>这解释了为什么没有 <code>task:heartbeat</code>、<code>task:lease-extended</code> 这类事件——那些内部翻转对用户没有意义，推出去只会制造噪音。你在界面上能看到的状态变化，恰好就是 <code>task:*</code> 事件的全集。</p>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>06 实时事件数据流</strong>——看事件从"某处发生变更"到"UI 刷新"的完整路径，以及两条通道各自的入口。</p>
+  <p class="open"><a href="../diagrams/06-realtime-dataflow.html">打开数据流图 →</a></p>
+</div>
+
+<h2>四、前端收到事件之后做什么</h2>
+
+<p>这一点必须和第 3 课的 State Rules 联起来看。<code>AGENTS.md</code> 的规定是：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>WebSocket events patch or invalidate Query caches, not server payloads in Zustand.</code></p>
+</div>
+
+<p>也就是说，实时事件<strong>只动 TanStack Query 的缓存</strong>，绝不去改 Zustand 里的服务端数据副本。两种处理方式：</p>
+
+<table>
+  <thead><tr><th>方式</th><th>什么时候用</th><th>代码里的样子</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>invalidate</strong>（作废重查）</td>
+      <td>结果不确定、或让服务端自己算最稳</td>
+      <td><code>qc.invalidateQueries({ queryKey: issueKeys.all(wsId) })</code></td>
+    </tr>
+    <tr>
+      <td><strong>patch</strong>（就地打补丁）</td>
+      <td>结果可预测，能直接算出新状态</td>
+      <td><code>qc.setQueryData(chatKeys.messages(sessionId), ...)</code> 追加一条消息</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>看 <code>packages/core/realtime/use-realtime-sync.ts</code> 的实际写法：Issue 类事件走 <code>invalidateQueries</code>（<code>issueKeys.all(wsId)</code>）；而聊天消息这类"追加一条、顺序明确"的走 <code>setQueryData</code> 直接补进去。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>注释里还有一句更严的话：聊天的 <code>task:*</code> 事件是 <strong>invalidate，而不是乐观的 setQueryData</strong>。原因是这类事件的到达顺序不保证，乐观写入可能把状态改错。</p>
+<p>规则可以记成一句话：<strong>能确定的补丁就补丁，不确定的一律作废重查。</strong></p>
+</div>
+
+<h2>五、服务端多实例了怎么办</h2>
+
+<p>一台服务端上，<code>realtime/hub.go</code> 管着所有连接与订阅。但服务端可能不止一个实例——A 实例上的客户端，需要收到 B 实例上发生的变更。仓库里对应的答案是这几个文件：</p>
+
+<ul>
+  <li><code>realtime/broadcaster.go</code>：广播抽象</li>
+  <li><code>realtime/redis_relay.go</code>：用 Redis 做跨实例转发</li>
+  <li><code>realtime/sharded_stream_relay.go</code>：分片流转发</li>
+  <li><code>realtime/stream_retention.go</code>：保留策略（重连后能补上错过的片段）</li>
+</ul>
+
+<p>你不需要现在读完它们。要记住的是这个判断：<strong>实时层的水平扩展是"转发"问题，而不是"让每个实例都查全量数据库"的问题</strong>。</p>
+
+<h2>六、为什么敢说"实时只是加速器"</h2>
+
+<p>把这一课和第 6 课连起来，整个系统的可靠性论证就完整了：</p>
+
+<ol>
+  <li>权威状态在 PostgreSQL 里（服务端是唯一写方）。</li>
+  <li>实时通道把变更<em>尽快</em>告诉客户端。</li>
+  <li>客户端丢事件、断开重连、甚至根本没连上——重新查询就能拿到正确状态。</li>
+</ol>
+
+<p>所以哪怕实时层整个挂掉，Multica 也不会"算错"，只会"看起来慢一点"。这是个很干净的设计边界。</p>
+
+<h2>七、检索练习</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="对。两条通道服务两类用户：人类客户端与 daemon。"
+     data-no="回想那张对比表的第一行：谁在连这两条通道？">
+  <p class="q">1. <code>/ws</code> 与 <code>/api/daemon/ws</code> 的根本区别是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">前者只推送、后者只接收，方向相反</button>
+    <button class="opt" data-key="b">前者用于开发调试，后者用于生产环境</button>
+    <button class="opt" data-key="c">前者服务人类客户端做广播，后者服务 daemon 并支持服务端反向 RPC</button>
+    <button class="opt" data-key="d">两者完全等价，只是历史原因保留了两个路径</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="正确。事件粒度是「用户想看到什么变化」，不是每一个内部状态翻转。"
+     data-no="回想那句注释：粒度由用户可见的变化决定。">
+  <p class="q">2. 为什么实时事件里没有"心跳延长了租约"这种消息？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为它涉及凭据，走加密通道而非常规事件通道</button>
+    <button class="opt" data-key="b">因为它是内部状态翻转，用户看不到也不需要知道</button>
+    <button class="opt" data-key="c">因为它每秒都会发生，出于带宽考虑被合并进了心跳</button>
+    <button class="opt" data-key="d">因为这类事件只在 daemon 通道上发送，不在人类通道上</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。实时事件只 patch/invalidate Query 缓存，不写 Zustand 的服务端数据。"
+     data-no="回到那条 State Rules：WebSocket events patch or invalidate Query caches, not server payloads in Zustand。">
+  <p class="q">3. 收到 <code>issue:updated</code> 后，前端正确做法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">作废或更新 TanStack Query 的 Issue 缓存，让界面重渲染</button>
+    <button class="opt" data-key="b">把新数据写进 Zustand store，让组件订阅该字段</button>
+    <button class="opt" data-key="c">直接命令式调用 DOM 更新对应列表行，避免重渲染</button>
+    <button class="opt" data-key="d">什么都不做，等用户手动刷新页面拉取最新数据</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，说出"实时事件 → 界面更新"这条链上的五个环节。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li>某处发生变更（例如 daemon 调 <code>POST .../complete</code>）。</li>
+      <li>服务端写入 PostgreSQL，并在事件源构造一条带冒号命名空间的事件（<code>task:completed</code>）。</li>
+      <li><code>realtime/hub.go</code> 按订阅范围把事件推给关心它的连接（多实例时经 relay 转发）。</li>
+      <li>客户端 <code>use-realtime-sync</code> 收到事件，按"确定就 patch、不确定就 invalidate"处理 Query 缓存。</li>
+      <li>React 组件因缓存变化重渲染，你看到进度条走完了。</li>
+    </ol>
+    <p>补充：这条链上的任何一环断掉，客户端<strong>重新查询</strong>都能恢复正确状态——这是"数据库是事实源"的直接推论。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/pkg/protocol/events.go</code>——整个实时系统的词汇表，含那句关于"事件粒度"的关键注释。</p>
+  <p>辅助：<code>server/internal/realtime/hub.go</code>（人类通道）；<code>server/internal/daemonws/notifier.go</code>（机器通道的通知侧）；<code>packages/core/realtime/use-realtime-sync.ts</code>（前端消费事件）；<code>AGENTS.md</code> 的 <em>State Rules</em>。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："断线重连后，客户端怎么知道错过了哪些事件？"——这正是 <code>stream_retention.go</code> 和查询重取要回答的问题，我们需要时可以一起把重连路径读一遍。</p>
+
+<div class="lesson-nav">
+  <a href="0008-cli-and-daemon.html">← 0008 · CLI 与 daemon</a>
+  <a href="0010-database-migrations.html">0010 · 数据库与迁移（Oracle 视角）→</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

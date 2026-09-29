@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0011 · 权限与安全：三种边界 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 11 课 / 共 14 课</p>
+<p class="kicker">Lesson 11</p>
+<h1>权限与安全：把三层边界分清</h1>
+<p class="deck">"安全"这个词在这个项目里被拆成了三个互不相同的问题：你是谁（认证）、你能做什么（授权）、Agent 能碰到你机器上的什么（执行隔离）。第三层的答案可能会让你意外——但它是官方文档里写得最清楚的一节。</p>
+<div class="meta">
+  <span>约 40 分钟</span>
+  <span>对应图表：08 权限校验链</span>
+  <span>对应源码：apps/docs/content/docs/security-model.zh.mdx · members-roles.zh.mdx · internal/middleware/</span>
+</div>
+
+<h2>一、三层边界，三个问题</h2>
+
+<table>
+  <thead><tr><th>层</th><th>要回答的问题</th><th>主要机制</th></tr></thead>
+  <tbody>
+    <tr><td><strong>认证</strong></td><td>你是谁？</td><td>会话 Cookie / PAT / daemon 令牌 / 运行令牌（第 6 课）</td></tr>
+    <tr><td><strong>授权</strong></td><td>你能在这个工作区做什么？</td><td>路由级角色中间件 + <code>workspace_id</code> 作用域</td></tr>
+    <tr><td><strong>执行隔离</strong></td><td>Agent 进程能碰到你机器上的什么？</td><td><strong>几乎没有机制——这是刻意留给外部的</strong></td></tr>
+  </tbody>
+</table>
+
+<p>第三层是这一课的重点，也是大多数教程会含糊过去的地方。我们把它放在最后单独讲。</p>
+
+<h2>二、授权：三种角色，一张表</h2>
+
+<p>官方文档 <code>members-roles.zh.mdx</code> 直接给了一张权限矩阵，照抄如下：</p>
+
+<table>
+  <thead><tr><th>操作</th><th>owner</th><th>admin</th><th>member</th></tr></thead>
+  <tbody>
+    <tr><td>查看工作区并参与日常协作</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr><td>修改工作区设置</td><td>✓</td><td>✓</td><td>—</td></tr>
+    <tr><td>邀请 <code>admin</code> 或 <code>member</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+    <tr><td>调整或移除 <code>admin</code>、<code>member</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+    <tr><td>授予、收回或移除 <code>owner</code></td><td>✓</td><td>—</td><td>—</td></tr>
+    <tr><td>删除工作区</td><td>✓</td><td>—</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<p>这张表在代码里的落地方式，第 4 课已经见过——它就是一个路由分组的事：</p>
+
+<pre><code>// member 组
+r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
+
+// owner/admin 组
+r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>注意这两个中间件的命名：<code>...FromURL</code>。权限判断用的工作区 ID 是<strong>从 URL 路径里取的</strong>，不是从请求头或请求体里取的。</p>
+<p>这是个有意的选择：路径是路由匹配的一部分，无法被客户端"顺便"改掉来绕过校验。</p>
+</div>
+
+<h3>作用域：每个查询都要带工作区</h3>
+
+<p><code>AGENTS.md</code> 里那条规定很短但很硬：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Workspace-scoped queries filter by workspace_id; membership gates access and X-Workspace-ID selects the workspace.</code></p>
+</div>
+
+<p>拆开看是三件事：<strong>成员资格决定能不能进</strong>（授权中间件）、<strong><code>X-Workspace-ID</code> 决定进哪一个</strong>（上下文选择）、<strong>SQL 里必须 <code>WHERE workspace_id = ...</code></strong>（数据隔离）。第三件事是最容易被漏的——漏一个，就是跨租户数据泄露。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这三件事在 Oracle 里对应的是：<strong>VPD / RLS 策略</strong>（行级自动过滤）+ <strong>应用上下文</strong>（当前租户）。区别是 Multica 没用数据库层的行级安全，而是把它写在应用代码的每个 SQL 里。</p>
+<p>代价很清楚：漏写一个 <code>WHERE</code> 就没有兜底。收益是查询可以按工作区做深度优化（还记得第 10 课那个"先按工作区收窄候选集"的检索策略吗？就是靠这个前提）。</p>
+</div>
+
+<h2>三、认证层的其余零件</h2>
+
+<p>除了四种令牌，<code>server/internal/middleware/</code> 里还有这些防线：</p>
+
+<table>
+  <thead><tr><th>文件</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td><code>auth.go</code></td><td>主认证：Cookie / PAT / 云端校验</td></tr>
+    <tr><td><code>daemon_auth.go</code></td><td>daemon 通道专用认证</td></tr>
+    <tr><td><code>plugin_auth.go</code> + <code>plugin_ratelimit.go</code></td><td>插件的独立身份与限流（第 13 课）</td></tr>
+    <tr><td><code>ratelimit.go</code></td><td>公开接口限流（登录、注册等）</td></tr>
+    <tr><td><code>session_renewal.go</code></td><td>会话续期</td></tr>
+    <tr><td><code>csp.go</code></td><td>内容安全策略响应头</td></tr>
+    <tr><td><code>cloudfront.go</code></td><td>CDN 签名（附件下载等）</td></tr>
+    <tr><td><code>owner_lookup.go</code></td><td>资源归属解析</td></tr>
+  </tbody>
+</table>
+
+<p>另一个值得注意的细节藏在 <code>router.go</code> 的注释里：附件下载接口有一个"能力式"（capability）的公开路径，因为原生下载（Electron 的 <code>webContents.downloadURL</code>、跨站 <code>&lt;img&gt;</code>）既不携带 <code>Authorization</code> 也不带 Cookie。<strong>它的凭据是 URL 里那串短期、单文件的签名，而这串签名只在已认证的 <code>GET /api/attachments/{id}</code> 通过成员校验之后才会签发。</strong></p>
+
+<p>这是个很典型的取舍：为了让原生下载能用，必须开一个无认证入口；于是把安全责任转移到"签发环节"——<strong>能拿到签名就说明你已经被校验过了</strong>。</p>
+
+<h2>四、执行隔离：官方最诚实的一节</h2>
+
+<p>现在讲最要紧的一层。<code>security-model.zh.mdx</code> 的标题就叫《安全模型》，它的第一句结论是：</p>
+
+<div class="callout watch">
+  <span class="tag">必须知道</span>
+<p><strong>边界是运行 daemon 的那个操作系统用户。</strong>默认情况下，每次执行拥有该用户的<em>全部权限</em>：它能读写的文件，运行都能读写；它的凭据，运行都能用；网络访问不受限制。</p>
+<p>官方原文：<code>Multica 不对文件系统沙箱作任何保证……请把每一次运行都当作无沙箱来对待，并把边界放在守护进程之外。</code></p>
+</div>
+
+<p>为什么不做沙箱？文档给的理由不是"没时间"，而是一个技术判断：</p>
+
+<ol>
+  <li>Agent 需要装依赖、跑构建、用你的云 CLI——这些工具都假设自己面对一个正常的 home 目录。不完整的沙箱会让它们以极难排查的方式坏掉（报"未登录"、悄悄用错账号）。</li>
+  <li>更关键的是<strong>它挡不住真正要紧的事</strong>：只限制写入的沙箱，无法阻止运行<em>读取</em>凭据并通过网络发出去。</li>
+</ol>
+
+<p>所以结论是：<strong>"Multica 不假装自己是边界。请在它外面加一层。"</strong></p>
+
+<h3>官方推荐的三种由轻到重的部署方式</h3>
+
+<table>
+  <thead><tr><th>方式</th><th>做法</th><th>代价</th></tr></thead>
+  <tbody>
+    <tr><td>专用 Unix 用户</td><td>建一个 <code>multica</code> 用户，只给它需要的仓库与凭据，用它运行 daemon</td><td>最轻，自己的账号完全不受影响</td></tr>
+    <tr><td>容器</td><td>容器里跑 daemon，只挂载需要的目录和密钥</td><td>需要容器化</td></tr>
+    <tr><td>虚拟机</td><td>隔离最彻底</td><td>要多一台机器</td></tr>
+  </tbody>
+</table>
+
+<p>无论选哪种，都要遵守一条原则：<strong>把该环境里可触达的凭据视为"Agent 可能会用到的凭据"</strong>——token 权限尽量收窄，优先用专用部署密钥而不是你的个人 SSH 私钥，别把无关的生产凭据留在那个 home 目录里。</p>
+
+<h3>哪些"隔离"是真的，哪些只是便利性</h3>
+
+<table>
+  <thead><tr><th>项目</th><th>真实作用</th></tr></thead>
+  <tbody>
+    <tr><td>每次运行独立工作目录（<code>~/multica_workspaces/</code>）</td><td>并发运行不在同一份 checkout 上打架</td></tr>
+    <tr><td>每次运行独立的 Agent 状态（如运行级 <code>CODEX_HOME</code>）</td><td>不污染你本机的 <code>~/.codex/</code></td></tr>
+    <tr><td>运行级 API token（<code>mat_</code>）</td><td>运行无法通过 Multica API 冒充你或别的 Agent</td></tr>
+  </tbody>
+</table>
+
+<p>文档把这三条明确归类为<strong>"便利性与影响面收敛，不是用来防御主动逃逸的安全边界"</strong>。这个区分很值得学：它避免了"我们做了沙箱所以安全"这类误导性表述。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>还有两条"<strong>不构成边界</strong>"的东西，容易被误解：</p>
+<ul>
+  <li><strong>Agent CLI 自带的沙箱与审批设置</strong>：Multica 以无人值守方式运行，审批请求被自动应答；默认路径下沙箱关闭（Codex 用 <code>danger-full-access</code>，Claude Code 用 <code>--permission-mode bypassPermissions</code>）。唯一例外是 Windows 上你显式开启了 Codex 原生沙箱。</li>
+  <li><strong>你的 <code>HOME</code> 目录结构</strong>：运行继承 daemon 用户真实的 <code>HOME</code> 与 <code>XDG_*</code>——正因如此 <code>gh</code>、<code>aws</code>、<code>kubectl</code> 在运行内行为和在你 shell 里一致；<strong>同时也意味着那个 home 下的一切都可触达</strong>。</li>
+</ul>
+</div>
+
+<h3>自查：这一条命令</h3>
+
+<pre><code>multica daemon logs --lines 200 | grep "codex sandbox"</code></pre>
+
+<p>运行以无沙箱方式启动时，daemon 会记 warn 级日志。想确认 Codex 的实际生效配置，看该运行 <code>CODEX_HOME</code> 下 <code>config.toml</code> 里被这两个标记包住的托管块：</p>
+
+<pre><code># BEGIN multica-managed
+...
+# END multica-managed</code></pre>
+
+<h2>五、权限校验链</h2>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>08 权限校验链</strong>——从"带什么凭据进来"到"落到哪张表、按哪个工作区过滤"，逐层收窄。把它和第 4 课的路由分组对照着看。</p>
+  <p class="open"><a href="../diagrams/08-permission-chain.html">打开权限链图 →</a></p>
+</div>
+
+<h2>六、检索练习</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="对。Multica 明确不做文件系统沙箱，边界必须在 daemon 之外自建。"
+     data-no="回想那句原文：Multica 不假装自己是边界，请在它外面加一层。">
+  <p class="q">1. 关于"Agent 能碰到你机器上的什么"，官方立场是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">每个运行都跑在独立容器里，只能访问自己的工作目录</button>
+    <button class="opt" data-key="b">默认只读挂载工作目录，写操作需要用户逐个审批</button>
+    <button class="opt" data-key="c">拥有 daemon 所属系统用户的全部权限；Multica 不提供文件系统沙箱</button>
+    <button class="opt" data-key="d">受运行时级 token 限制，除 Multica 目录外均无权限</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="正确。它在路由分组里声明，读路由即可判断准入。"
+     data-no="回想第 4 课：鉴权写在中间件注册处，不在 handler 里的 if。">
+  <p class="q">2. 想知道"删除工作区"需要什么角色，最快的判断方法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">看前端设置页里那个按钮的显示条件</button>
+    <button class="opt" data-key="b">看该路由所在分组挂的是哪个角色中间件</button>
+    <button class="opt" data-key="c">查 member 表上有没有对应的权限位字段</button>
+    <button class="opt" data-key="d">看 handler 里是否显式比较了当前用户角色</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。路径无法被客户端顺手改掉来绕过校验，比从请求头取更稳。"
+     data-no="注意中间件名里的 FromURL：权限判断用的工作区 ID 来自哪里？">
+  <p class="q">3. 为什么授权中间件叫 <code>RequireWorkspaceRoleFromURL</code>，要从 URL 取工作区 ID？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为路径是路由匹配的一部分，客户端无法"顺带"改动它来绕过校验</button>
+    <button class="opt" data-key="b">因为 URL 里的参数解析比请求头更快，能降低鉴权开销</button>
+    <button class="opt" data-key="c">因为请求头只允许承载认证信息，不适合放业务标识</button>
+    <button class="opt" data-key="d">因为这样可以直接复用 chi 的路由参数解析，少写一次解析代码</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，说出安全的三层，以及每层的机制或结论。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>认证（你是谁）</strong>：会话 Cookie / PAT（<code>mul_</code>）/ daemon 令牌（<code>mdt_</code>）/ 运行令牌（<code>mat_</code>），逐级收窄。</li>
+      <li><strong>授权（你能做什么）</strong>：owner / admin / member 三角色，靠路由分组里的角色中间件声明；所有查询必须按 <code>workspace_id</code> 过滤，成员资格把门，<code>X-Workspace-ID</code> 选工作区。</li>
+      <li><strong>执行隔离（Agent 能碰到什么）</strong>：<strong>边界就是运行 daemon 的那个 OS 用户</strong>；Multica 不做文件系统沙箱，官方要求你在外面加一层（专用用户 / 容器 / VM），并假定该 home 下的一切凭据都可能被用到。</li>
+    </ol>
+    <p>最容易误判的是第三层：工作目录隔离、运行级 token 这些是"影响面收敛"，<strong>不是</strong>安全边界。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>apps/docs/content/docs/security-model.zh.mdx</code>——中文全文不到 60 行，但把"什么是边界、什么不是"讲得比大多数产品文档清楚。本课第四节基本是它的精炼版。</p>
+  <p>辅助：<code>members-roles.zh.mdx</code>（角色矩阵）；<code>auth-tokens.zh.mdx</code>（令牌管理）；<code>server/internal/middleware/</code>（各道防线）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："既然不做沙箱，那第 6 课那枚 <code>mat_</code> 令牌到底保护的是什么？"——它防的不是"Agent 动你文件"，而是"Agent 冒用你的身份操作 Multica"。这两个威胁模型完全不同，值得当面掰一次。</p>
+
+<div class="lesson-nav">
+  <a href="0010-database-migrations.html">← 0010 · 数据库与迁移</a>
+  <a href="0012-selfhost.html">0012 · 自部署与本地开发 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

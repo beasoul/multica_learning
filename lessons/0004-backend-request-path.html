@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0004 · 一个请求的旅行 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 4 课 / 共 14 课</p>
+<p class="kicker">Lesson 04</p>
+<h1>一个 HTTP 请求的旅行：从路由到 SQL</h1>
+<p class="deck">这一课要给你一个可以反复使用的"读代码套路"：随便挑一个接口，顺着 router → middleware → handler → service → SQL 一路读下去。练熟之后，Multica 后端 130 个 handler 文件对你就不再是黑箱。</p>
+<div class="meta">
+  <span>约 40 分钟</span>
+  <span>对应源码：server/cmd/server/router.go · internal/middleware/ · internal/handler/ · internal/service/</span>
+  <span>前置：第 3 课（分层）</span>
+</div>
+
+<h2>一、先看总入口</h2>
+
+<p>后端的可执行入口在 <code>server/cmd/server/</code>。它做完配置、连接池、迁移之后，最后一步是<strong>装配路由</strong>——所有 HTTP 接口都写在 <code>router.go</code> 这一个文件里（约 2000 行，但结构极其规整）。</p>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><code>server/cmd/server/router.go</code> 是<strong>找接口的唯一入口</strong>。你想知道"这个功能有没有后端接口、叫什么路径、走哪层鉴权"，永远从这里开始，而不是靠全局搜索。</p>
+</div>
+
+<h2>二、全局中间件链：每个请求都要过一遍</h2>
+
+<p><code>router.go</code> 开头挂了一串全局中间件，<strong>顺序就是执行顺序</strong>：</p>
+
+<pre><code>r.Use(chimw.RequestID)                    // 1. 给请求打一个唯一 ID，贯穿日志
+r.Use(middleware.ClientMetadata)          // 2. 采集客户端信息（UA / IP / 来源）
+r.Use(middleware.RequestLogger)           // 3. 记一条访问日志
+r.Use(opts.HTTPMetrics.Middleware)        // 4. 若有指标采集器，计入 QPS/耗时
+r.Use(chimw.Recoverer)                    // 5. panic 兜底，转成 500 而不是进程崩溃
+r.Use(h.PluginSurfaceHostBoundary)        // 6. 插件宿主边界（第 13 课）
+r.Use(middleware.ContentSecurityPolicy)   // 7. 安全响应头
+r.Use(cors.Handler(...))                  // 8. 跨域策略</code></pre>
+
+<p>三个值得注意的细节：</p>
+
+<ul>
+  <li><strong>RequestID 排第一</strong>，因为后面所有日志都要带上它。这是你排查线上问题时唯一能把一次请求的多行日志串起来的东西。</li>
+  <li><strong>Recoverer 排在日志之后</strong>，所以 panic 也会留下访问日志——不是"崩了就没记录"。</li>
+  <li><strong>CORS 在最后一层</strong>，并且它的来源白名单同时被 WebSocket 的 Origin 校验复用（<code>realtime.SetAllowedOrigins(origins)</code>），避免两套配置打架。</li>
+</ul>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这一串中间件，等价于你在 Oracle 里用 <code>LOGON</code> 触发器 + 审计策略包住所有数据库访问：每个连接进来先过一遍，决定记录什么、拦截什么、注入什么上下文。</p>
+<p>差别是这里的"上下文"用 Go 的 <code>context.Context</code> 往下传，而不是会话级全局变量。</p>
+</div>
+
+<h2>三、三组路由，三种身份</h2>
+
+<p>全局中间件之后，<code>router.go</code> 把接口分成几大组，每组有自己的鉴权准入：</p>
+
+<table>
+  <thead><tr><th>路由前缀</th><th>准入中间件</th><th>意味着</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>/health</code>、<code>/readyz</code>、<code>/healthz</code></td>
+      <td>无</td>
+      <td>给人/编排系统探活用，不查数据库权限</td>
+    </tr>
+    <tr>
+      <td><code>/ws</code></td>
+      <td>实时层自带的成员校验</td>
+      <td>人类客户端的实时通道（第 9 课）</td>
+    </tr>
+    <tr>
+      <td><code>/api/daemon/*</code></td>
+      <td><code>middleware.DaemonAuth</code></td>
+      <td><strong>只认 daemon 令牌</strong>，普通用户令牌进不来</td>
+    </tr>
+    <tr>
+      <td>登录 / 注册 / 表单类</td>
+      <td><code>middleware.RateLimit</code> 等</td>
+      <td>未认证也要能访问，但限流</td>
+    </tr>
+    <tr>
+      <td>其余 <code>/api/*</code></td>
+      <td><code>middleware.Auth</code></td>
+      <td>必须有会话 Cookie 或 PAT；通过后 <code>context</code> 里塞进当前用户</td>
+    </tr>
+    <tr>
+      <td><code>/api/workspaces/{id}/*</code></td>
+      <td>再叠一层 <code>RequireWorkspaceMemberFromURL</code> 或 <code>RequireWorkspaceRoleFromURL</code></td>
+      <td><strong>同一组路由内部按权限再分开</strong>：读操作 member 即可，写操作要 owner/admin</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>最后一行是这个文件里最有参考价值的设计模式。同一个 <code>/api/workspaces/{id}</code> 前缀下，作者用两个 <code>r.Group</code> 把它劈成两半：</p>
+
+<pre><code>r.Route("/api/workspaces", func(r chi.Router) {
+  r.Route("/{id}", func(r chi.Router) {
+
+    // 成员可见：读列表、读详情、看插件装了啥
+    r.Group(func(r chi.Router) {
+      r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
+      r.Get("/",              h.GetWorkspace)
+      r.Get("/members",       h.ListMembersWithUser)
+      r.Get("/plugins",       h.ListPlugins)
+      // ...
+    })
+
+    // 管理员专属：改工作区、邀请/删人、装插件
+    r.Group(func(r chi.Router) {
+      r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+      r.Patch("/",            h.UpdateWorkspace)
+      r.Post("/members",      h.CreateInvitation)
+      // ...
+    })
+  })
+})</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>Multica 的鉴权是<strong>"路由级声明"</strong>，不是"handler 里 if 判断"。你想知道某个接口谁能调，<strong>看路由分组就够了，不用读 handler 实现</strong>。</p>
+</div>
+
+<h2>四、handler 之后是什么</h2>
+
+<p>中间件放行后进入 handler（<code>server/internal/handler/</code>，130 个文件）。handler 的职责被严格限制在三件事上：</p>
+
+<ol>
+  <li><strong>解析输入</strong>：路径参数、查询串、请求体。UUID 怎么解析有硬规定（见下）。</li>
+  <li><strong>调 service</strong>：真正的业务判断都在 <code>internal/service/</code>。</li>
+  <li><strong>写响应</strong>：统一的 JSON 形状与错误码。</li>
+</ol>
+
+<p>service 再往下，就是手写 SQL（<code>server/pkg/db/queries/</code>，65 个 <code>.sql</code> 文件）和 sqlc 的生成物（<code>server/pkg/db/generated/</code>）——最终打到 PostgreSQL。</p>
+
+<pre><code>HTTP 请求
+  → middleware.Auth                      认证：你是谁
+  → RequireWorkspaceMemberFromURL        授权：你能进这个工作区吗
+  → handler.ListMembersWithUser          解析参数、调 service、写响应
+  → service.xxx                          业务规则
+  → queries.ListMembersWithUser  (sqlc)  类型安全的 SQL
+  → PostgreSQL</code></pre>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>In server/internal/handler/, distinguish UUID sources before using them in writes</code> —— handler 里解析 UUID 要分四种来源，用四种不同方法：URL 里可能是"UUID 或人类可读的 slug"（用 <code>loadXxxForUser</code> 解析后取 <code>entity.ID</code>）、纯 UUID 输入（<code>parseUUIDOrBadRequest</code>）、可信内部回环（<code>parseUUID</code>，非法直接 panic）、handler 之外（<code>util.ParseUUID</code> 并检查错误）。（AGENTS.md · Backend UUID Rules）</p>
+</div>
+
+<h2>五、sqlc 是什么（Oracle 视角）</h2>
+
+<p>sqlc 做的事：你写 <code>.sql</code>，它读你的建表语句，<strong>自动生成强类型的 Go 函数</strong>。比如你在 <code>queries/member.sql</code> 里写：</p>
+
+<pre><code>-- name: ListMembersWithUser :many
+SELECT ... FROM member m JOIN "user" u ON ... WHERE m.workspace_id = $1;</code></pre>
+
+<p>生成出来的就是 <code>func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UUID) ([]ListMembersWithUserRow, error)</code>。参数类型错了、字段名写错了，<strong>编译期就报错</strong>。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>Oracle 里你要往 Java/Python 写 SQL，通常是字符串拼接 + 运行时才发现列名写错。Multica 的做法更接近<strong>预编译的存储过程 + 强类型接口</strong>：SQL 是手写的（不牺牲表达能力），但接口是生成的（不牺牲类型安全）。</p>
+<p>对比 <code>server/migrations/</code>：那里管<strong>结构变更</strong>（DDL，第 10 课），<code>queries/</code> 只管<strong>数据访问</strong>（DML）。两者职责不重叠，这是读代码时要分清的第一件事。</p>
+</div>
+
+<h2>六、读这批 Go 代码需要的最小语法</h2>
+
+<table>
+  <thead><tr><th>写法</th><th>含义</th><th>Python / Oracle 对应</th></tr></thead>
+  <tbody>
+    <tr><td><code>func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request)</code></td><td>带接收者的方法，等价于"给 Handler 类加个方法"</td><td><code>class Handler: def get_workspace(self, w, r)</code></td></tr>
+    <tr><td><code>func f() (T, error)</code></td><td>返回值多一个 <code>error</code>，调用方必须判</td><td>Python 的 <code>try/except</code>，但由编译器强制检查</td></tr>
+    <tr><td><code>ctx context.Context</code></td><td>贯穿整个调用链的上下文：超时、取消、请求级元数据</td><td>会话级 <code>SYS_CONTEXT</code>，但显式传参</td></tr>
+    <tr><td><code>`json:"workspace_id"`</code></td><td>结构体字段标签，控制序列化出的键名</td><td>ORM 的列映射注解</td></tr>
+    <tr><td><code>interface{ ... }</code></td><td><strong>隐式实现</strong>：只要方法签名对得上就算实现，不用显式声明</td><td>Python 的鸭子类型，但由编译器检查</td></tr>
+  </tbody>
+</table>
+
+<p>最后一条是读 daemon 与 agent 适配层的关键（第 7、8 课），先记住一句话：<strong>Go 的接口是"方法签名契约"，没有 <code>implements</code> 关键字</strong>。</p>
+
+<h2>七、动手：自己定位一个接口</h2>
+
+<p>给你一个具体问题：<em>"前端点'成员列表'时打的是哪个接口？"</em> 按下面顺序做，全程不超过 3 分钟：</p>
+
+<ol>
+  <li>打开 <code>server/cmd/server/router.go</code>，搜 <code>members</code>。</li>
+  <li>命中 <code>r.Get("/members", h.ListMembersWithUser)</code>，确认它在 <code>RequireWorkspaceMemberFromURL</code> 那个 group 里。</li>
+  <li>打开 <code>server/internal/handler/</code> 搜 <code>func (h *Handler) ListMembersWithUser</code>，看它调了哪个 service / query。</li>
+  <li>在 <code>server/pkg/db/queries/member.sql</code> 里找同名 query，看它读了哪张表、过滤了什么。</li>
+</ol>
+
+<p>四步对应四层。以后遇到任何"这个功能怎么实现的"，都用这套路。</p>
+
+<h2>八、检索练习</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。鉴权是路由级声明，读路由分组即可判断准入。"
+     data-no="回想那两个 r.Group：权限判断写在中间件注册处，不在 handler 里。">
+  <p class="q">1. 你想快速判断"删除工作区成员"这个接口需要什么权限，最省事的做法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">读 handler 实现，在里面找判断当前用户角色的 if 分支</button>
+    <button class="opt" data-key="b">在 router.go 里找到该路由所在的分组，看它挂了哪个鉴权中间件</button>
+    <button class="opt" data-key="c">看前端页面里那个按钮在什么条件下渲染出来</button>
+    <button class="opt" data-key="d">查数据库里成员表有没有定义对应的权限字段</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="c"
+     data-yes="正确。queries/ 管数据访问（DML），migrations/ 管结构变更（DDL）。"
+     data-no="区分一下这两个目录：一个是手写 SQL + sqlc 生成物，一个是 up/down 的 DDL 脚本。">
+  <p class="q">2. 要给 Issue 表加一列 <code>pinned_at</code>，你要同时改哪里？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">只改 <code>pkg/db/queries/issue.sql</code>，sqlc 会自动推演出建表语句</button>
+    <button class="opt" data-key="b">只改 <code>migrations/</code>，查询层会自动多出这个字段的读写方法</button>
+    <button class="opt" data-key="c">migrations 加 DDL 迁移；queries 里改 SQL 并重新生成 sqlc</button>
+    <button class="opt" data-key="d">先改 Go 结构体，编译器会按字段名反推出需要哪些迁移</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。全局链的顺序是有讲究的：RequestID 最先，Recoverer 在日志之后。"
+     data-no="回到那串 r.Use 的顺序：谁最先挂谁最先执行。">
+  <p class="q">3. 为什么 <code>RequestID</code> 中间件挂在整条链的最前面？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为后续所有日志和错误响应都要带上这个 ID，用于串联一次请求</button>
+    <button class="opt" data-key="b">因为它必须最先返回给客户端，避免客户端等待后端处理时间</button>
+    <button class="opt" data-key="c">因为它负责生成鉴权令牌，后面的认证中间件依赖它的输出</button>
+    <button class="opt" data-key="d">因为它要做限流计数，晚于它挂载会导致统计漏掉部分请求</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，写出一个 <code>/api/workspaces/{id}/plugins</code> 这类请求从进来到落库要经过的层次，并说出每层"负责什么、不负责什么"。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>全局中间件链</strong>：打 RequestID、记日志、panic 兜底、CORS/CSP。<em>不做鉴权。</em></li>
+      <li><strong>认证中间件 <code>middleware.Auth</code></strong>：确认"你是谁"，把用户塞进 context。</li>
+      <li><strong>工作区授权中间件</strong>（<code>RequireWorkspaceMemberFromURL</code> / <code>RequireWorkspaceRoleFromURL</code>）：确认"你能进这个工作区吗、你有这个权限吗"。<em>它不关心业务语义。</em></li>
+      <li><strong>handler</strong>：解析参数（UUID 按来源用不同方法）、调 service、写响应。<em>不写业务规则。</em></li>
+      <li><strong>service</strong>：业务规则与事务边界。</li>
+      <li><strong>queries（sqlc 生成物）</strong>：执行 SQL。<em>不做权限判断。</em> → PostgreSQL</li>
+    </ol>
+    <p>一条通用判断法：权限在<strong>路由分组</strong>，业务在 <strong>service</strong>，SQL 在 <strong>queries</strong>。找到哪一层，就找到了该改的文件。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/cmd/server/router.go</code>——从上往下读前 200 行（中间件链）和 <code>/api/workspaces</code> 那一大段（分组鉴权），其余按需查阅。</p>
+  <p>辅助：<code>AGENTS.md</code> 的 <em>Backend UUID Rules</em>；<code>server/pkg/db/queries/</code> 里随便挑一个 <code>.sql</code> 对照生成物看一遍。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："为什么这个仓库不引入 ORM？"——因为 <code>.sql</code> 手写 + sqlc 生成能同时拿到 SQL 的完全控制权和编译期类型检查，这个取舍在 <code>AGENTS.md</code> 的 <em>Development and Verification</em>（<code>make sqlc</code>）和迁移规则里能印证。</p>
+
+<div class="lesson-nav">
+  <a href="0003-repo-layers.html">← 0003 · 仓库分层</a>
+  <a href="0005-run-lifecycle.html">0005 · Run 的状态机 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

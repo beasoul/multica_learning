@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0010 · 数据库与迁移（Oracle 视角）| Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 10 课 / 共 14 课</p>
+<p class="kicker">Lesson 10</p>
+<h1>数据库与迁移：用 Oracle 的眼睛读 PostgreSQL 工程</h1>
+<p class="deck">这是你的主场。Multica 的迁移规则写得比大多数项目都严格，而且它的很多约束在 Oracle 里有直接对应物——你用 <code>ONLINE</code> 索引重建、<code>DBMS_STATS</code>、<code>advisory lock</code> 这些概念去理解，会比从零学 PostgreSQL 快得多。</p>
+<div class="meta">
+  <span>约 45 分钟</span>
+  <span>对应源码：AGENTS.md（Database and Migration Rules）· server/migrations/ · cmd/migrate/README.md</span>
+</div>
+
+<h2>一、先看规模</h2>
+
+<table>
+  <thead><tr><th>项</th><th>现状</th></tr></thead>
+  <tbody>
+    <tr><td>迁移文件总数</td><td>1178 个 = <strong>589 组</strong> <code>.up.sql</code> / <code>.down.sql</code> 成对</td></tr>
+    <tr><td>命名</td><td><code>001_init.up.sql</code>、<code>002_agent_config.up.sql</code>…… 三位编号 + 下划线描述</td></tr>
+    <tr><td>位置</td><td><code>server/migrations/</code></td></tr>
+    <tr><td>runner</td><td><code>server/cmd/migrate/main.go</code> + <code>server/internal/migrations/migrations.go</code></td></tr>
+    <tr><td>数据访问</td><td><code>server/pkg/db/queries/</code>（65 个 <code>.sql</code>，第 4 课讲过）</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><strong>DDL 与 DML 是分开的两套东西。</strong><code>migrations/</code> 只管表结构变更（<code>CREATE</code>/<code>ALTER</code>/<code>DROP INDEX</code>），<code>queries/</code> 只管数据读写。</p>
+<p>改表结构 → 动 migrations；改查询 → 动 queries 并重新生成 sqlc。混了就要出问题。</p>
+</div>
+
+<h2>二、三条硬规则（原文照抄）</h2>
+
+<p><code>AGENTS.md</code> 的 <em>Database and Migration Rules</em> 只有三条，但每条都有明确代价：</p>
+
+<h3>规则 1：不用外键，也不做级联删除/更新</h3>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Do not add foreign keys, cascading deletes, or cascading updates. Validate relationships and clean up dependents in application code, using a transaction when the operation must be atomic.</code></p>
+</div>
+
+<p>实践含义：<strong>引用完整性由应用层负责</strong>。删一个工作区时，所有从属数据的清理要显式写出来，必要时包在一个事务里。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这和你在 Oracle 里见到的两种风格之争是同一件事：</p>
+<ul>
+  <li><strong>把约束交给数据库</strong>（外键 + <code>ON DELETE CASCADE</code>）：省心，但一次误删可能连带删掉一大片，而且级联路径不透明。</li>
+  <li><strong>把约束交给应用</strong>：清理逻辑可见、可审计、可分批；代价是每一处新人手都要记得写。</li>
+</ul>
+<p>Multica 选后者。你在 <code>queries/workspace_delete.sql</code> 这种文件里看到的就是前者的替代品。</p>
+</div>
+
+<h3>规则 2：所有索引都用 <code>CONCURRENTLY</code> 建</h3>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Every migration-created index, including indexes on new tables, uses CREATE [UNIQUE] INDEX CONCURRENTLY. Each concurrent index build gets its own single-statement migration file; the runner executes files outside an explicit transaction.</code></p>
+</div>
+
+<p>拆成三个可执行的要求：</p>
+
+<ol>
+  <li>建索引一律带 <code>CONCURRENTLY</code>——<strong>不长时间阻塞写入</strong>。</li>
+  <li>每个并发索引<strong>独占一个只含一条语句的迁移文件</strong>——因为它必须单独执行。</li>
+  <li>这些文件由 runner <strong>在事务之外</strong>执行——因为 <code>CONCURRENTLY</code> 不能在事务块里跑。</li>
+</ol>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>第 1 条你太熟悉了：这就是 Oracle 的 <code>CREATE INDEX ... ONLINE</code>（在线索引重建）。普通建索引会长时间持锁，业务写入被卡住；<code>ONLINE</code> / <code>CONCURRENTLY</code> 都是用更长的构建时间换"不挡业务"。</p>
+<p>第 3 条是 PostgreSQL 特有的坑：<strong>Oracle 的 DDL 隐式提交，压根不存在"DDL 包在事务里"这种情况</strong>；而 PostgreSQL 支持事务型 DDL，于是"并发索引必须在事务外"变成了一条必须显式说明的约束。</p>
+</div>
+
+<h3>规则 3：被跳过的迁移也要记账，后续 DDL 必须幂等</h3>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Conditionally skipped migrations are still recorded in schema_migrations. Later DDL touching conditional objects must be idempotent (IF EXISTS / IF NOT EXISTS); document recovery if the missing object would break runtime behavior.</code></p>
+</div>
+
+<p>这条解释了 <code>cmd/migrate/README.md</code> 里那段很长的说明：有些迁移依赖扩展或操作符类（比如 <code>pg_bigm</code> 的 <code>gin_bigm_ops</code>）。装了就建索引，没装就把 SQL 跳过、<strong>但版本号照样记进 <code>schema_migrations</code></strong>。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+  <p>这个"记账"是<strong>永久的</strong>。README 里写得很直白：<code>That record is permanent, so a database that gains pg_bigm later never builds the index on its own.</code></p>
+  <p>后果：<strong>后来才装上扩展的库，索引永远不会自动出现，得手工补建。</strong>这个坑和 Oracle 里"条件执行的 DDL 脚本留下不一致状态"是同一类问题。</p>
+</div>
+
+<h2>三、一个完整的性能故事：表达式索引 + 统计信息</h2>
+
+<p>README 里有一段堪称教科书的说明，值得逐字理解，因为它同时覆盖了三件容易错的事。场景是给 Issue 的属性（JSONB 文本）做模糊搜索的预过滤索引：</p>
+
+<pre><code>CREATE EXTENSION IF NOT EXISTS pg_bigm;
+DROP INDEX CONCURRENTLY IF EXISTS idx_issue_properties_bigm;
+CREATE INDEX CONCURRENTLY idx_issue_properties_bigm
+    ON issue USING gin (LOWER(properties::text) gin_bigm_ops);
+ANALYZE issue;</code></pre>
+
+<p>三条要点：</p>
+
+<table>
+  <thead><tr><th>要点</th><th>含义</th><th>Oracle 对照</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>ANALYZE</code> 不是形式主义</td>
+      <td>建<strong>表达式索引</strong>不会自动为表达式收集统计信息。没有统计信息，优化器只能用一个"单字符搜索词约占表 5%"的启发式估算，然后放弃索引走全表扫描——<strong>索引建好了、有效、却完全不被使用</strong>。</td>
+      <td><code>DBMS_STATS.GATHER_TABLE_STATS</code>。同样是"索引存在但优化器不选它"。</td>
+    </tr>
+    <tr>
+      <td>表达式要一字不差</td>
+      <td>谓词写的是 <code>LOWER(properties::text) LIKE LOWER(...)</code>，所以索引也必须是 <code>LOWER</code> 形式。写成 <code>ILIKE</code> 形状或忘了 <code>LOWER</code>，这个索引永远不会被用。</td>
+      <td>函数索引必须与查询表达式匹配，否则失效。</td>
+    </tr>
+    <tr>
+      <td>验证统计真的落库</td>
+      <td><code>SELECT count(*) FROM pg_statistic WHERE starelid = 'idx_issue_properties_bigm'::regclass;</code></td>
+      <td>查 <code>USER_/DBA_TAB_STATISTICS</code>。</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>这段说明之所以值钱，是因为它把"<strong>性能问题可能出在统计信息而不是索引设计</strong>"讲成了可复现的步骤。<strong>索引存在 ≠ 索引被使用</strong>——诊断顺序应该是：看执行计划 → 看有没有统计 → 再看索引定义是否与谓词匹配。</p>
+</div>
+
+<h2>四、检索全文用的是什么</h2>
+
+<p>从迁移史能看出一个技术演进：项目早期用 GIN 索引（<code>pg_trgm</code> 三元组 / <code>pg_bigm</code> 二元组）做 Issue 描述与评论内容的全文检索，后来<strong>把这两个全局 GIN 索引退役了</strong>（迁移 454/455 退役评论内容索引，463/464 退役描述索引）。</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>SearchIssues now scans the selected workspace's issue candidates and evaluates description matches during projection, so neither global description GIN is read.</code></p>
+</div>
+
+<p>新的策略是<strong>"先按工作区收窄候选集，再在投影阶段做匹配"</strong>。这个取舍很好理解：全局 GIN 在大表上又大又难维护，而实际查询永远带着 <code>workspace_id</code> 这个高选择性条件——先用它把范围砍下来，再逐行判断，往往更划算。</p>
+
+<p>为什么是 <code>pg_bigm</code>（二元组）而不是 <code>pg_trgm</code>（三元组）？因为 <strong>中文没有词间空格</strong>：二元组对 CJK 更友好。这在 README 里也点明了（<code>CJK-friendly bigram index</code>）。</p>
+
+<h2>五、迁移在什么时候跑</h2>
+
+<p>关键事实：<strong>迁移在后端启动过程中执行</strong>，不是靠人手动跑的独立步骤。README 提到 Helm 的启动探针给了 10 分钟预算，所以大表上的索引构建要提前评估。</p>
+
+<p>随之而来的操作纪律（README 给的处方，可以照抄）：</p>
+
+<ol>
+  <li><strong>先量规模</strong>：<code>SELECT count(*) FROM agent_task_queue WHERE chat_session_id IS NOT NULL;</code></li>
+  <li><strong>低峰窗口预建</strong>：把语句<em>单独</em>、<em>事务外</em>跑一遍，让迁移变成快速空操作。</li>
+  <li><strong>验证可用性</strong>：查 <code>pg_index</code> 的 <code>indisvalid</code> / <code>indisready</code> / <code>indislive</code> 三个标志。</li>
+  <li><strong>构建被打断怎么办</strong>：并发的无效索引要先 <code>DROP INDEX CONCURRENTLY</code> 再重建；迁移 runner 也注册了无效索引清理，下次启动能自愈。</li>
+</ol>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这套"先预建、再让迁移变成空操作"的做法，在 Oracle 里就是大表上做在线索引重建的标准姿势：<strong>别让上线那一刻的 DDL 承担几个小时的构建时间</strong>，提前在低峰期把结构准备好，发布时只做一次轻量校验。</p>
+</div>
+
+<h2>六、实操：自己加一个迁移</h2>
+
+<pre><code># 1. 在 server/migrations/ 下按编号新建一对文件
+server/migrations/564_add_issue_pinned_at.up.sql
+server/migrations/564_add_issue_pinned_at.down.sql
+
+# up：加列（普通 DDL，可幂等时加 IF NOT EXISTS）
+ALTER TABLE issue ADD COLUMN IF NOT EXISTS pinned_at timestamptz;
+
+# 若要建索引：单独一个迁移文件，只放一条语句
+# server/migrations/565_add_issue_pinned_at_index.up.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_issue_pinned_at ON issue (pinned_at);
+
+# 2. 改了 SQL 查询就重新生成 sqlc
+make sqlc
+
+# 3. 起环境验证
+make up && make status</code></pre>
+
+<p>注意三个"不要"：不要加外键、不要在 up 里塞多条语句混着并发索引、不要忘了同步写 down。</p>
+
+<h2>七、检索练习</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="对。CONCURRENTLY 不能在事务块里执行，所以必须单独一个文件、且在事务外跑。"
+     data-no="回想那三条可执行要求：并发索引要独占文件、并在事务外执行。">
+  <p class="q">1. 为什么每个 <code>CONCURRENTLY</code> 建索引的迁移都要单独一个文件？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为文件名要唯一，方便 runner 排序与回滚</button>
+    <button class="opt" data-key="b">因为并发建索引耗时太长，需要放宽单文件执行超时</button>
+    <button class="opt" data-key="c">因为并发索引不能在事务块内执行，必须让 runner 单独、事务外地跑它</button>
+    <button class="opt" data-key="d">因为 PostgreSQL 不允许一个迁移文件里出现两个 CREATE INDEX</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="正确。表达式索引不会自动收集统计信息，缺统计时优化器会放弃它。"
+     data-no="回想那个「索引有效却不被使用」的故事：缺的是什么？">
+  <p class="q">2. 索引建好了、<code>indisvalid</code> 也是真，但查询仍走全表扫描。最可能缺了什么？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">缺少 <code>VACUUM FULL</code>，表膨胀导致优化器不信任该索引</button>
+    <button class="opt" data-key="b">缺少表达式索引的统计信息（需要 <code>ANALYZE</code>）</button>
+    <button class="opt" data-key="c">缺少对该索引的显式 <code>COMMIT</code>，元数据未生效</button>
+    <button class="opt" data-key="d">缺少唯一约束，优化器不会为普通索引生成计划</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。条件跳过的迁移会被永久记账，后来装上扩展也不会自动补建。"
+     data-no="回顾规则 3 与那句 That record is permanent：记账是永久的。">
+  <p class="q">3. 一台自部署库最初没装 <code>pg_bigm</code>，半年后装上了。会发生什么？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">索引不会自动出现，因为那次迁移已被记为"跳过"且不会重跑，需要手工补建</button>
+    <button class="opt" data-key="b">下次启动 runner 会检测到扩展可用并自动补建该索引</button>
+    <button class="opt" data-key="c">所有历史迁移会被重放一遍以补齐所有条件对象</button>
+    <button class="opt" data-key="d">扩展安装会让 PostgreSQL 自动为所有 GIN 候选列建索引</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，凭记忆写出迁移规则的三条，并各给一个 Oracle 对照。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ol>
+      <li><strong>不加外键与级联</strong>，关系与应用层清理、必要时用事务。<br>对照：Oracle 里"约束交给数据库 vs 交给应用"的取舍；这里等同自己写 <code>workspace_delete.sql</code> 这类清理。</li>
+      <li><strong>索引一律 <code>CONCURRENTLY</code></strong>，每个并发索引独占一个单语句文件，runner 在事务外执行。<br>对照：Oracle 的 <code>CREATE INDEX ... ONLINE</code>；而"必须事务外"是 PostgreSQL 事务型 DDL 带来的额外约束（Oracle DDL 隐式提交，不存在此问题）。</li>
+      <li><strong>条件跳过的迁移也记账</strong>，后续 DDL 必须幂等（<code>IF EXISTS</code> / <code>IF NOT EXISTS</code>）。<br>对照：类似 Oracle 里带条件的 DDL 脚本留下的状态不一致，必须靠幂等重跑自愈。</li>
+    </ol>
+    <p>附加一条操作层面的：迁移在<strong>后端启动时</strong>执行，所以大表上的索引构建要提前在低峰期预建，让迁移退化为空操作。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>server/cmd/migrate/README.md</code>——全篇是真实案例的操作手册（含可直接照抄的 SQL），本课第三节与第五节几乎就是它的浓缩。强烈建议整篇读。</p>
+  <p>辅助：<code>AGENTS.md</code> 的 <em>Database and Migration Rules</em>；<code>server/migrations/</code> 里挑几组近期的 up/down 对照看；<code>apps/docs/content/docs/self-host-quickstart.zh.mdx</code>。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："为什么不干脆上分区表？"——Multica 的 <code>agent_task_queue</code> 是一个持续增长的大表，分区是常见答案。这是个可以深聊的架构题，我建议先看它现在用什么手段控住增长（索引 + GC + 保留策略），再讨论分区值不值得。</p>
+
+<div class="lesson-nav">
+  <a href="0009-realtime.html">← 0009 · 实时同步</a>
+  <a href="0011-security.html">0011 · 权限与安全：四种令牌与校验链 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

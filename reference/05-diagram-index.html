@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 图表索引 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 速查文档 5 / 5</p>
+<p class="kicker">Reference 05</p>
+<h1>图表索引</h1>
+<p class="deck">八张图不是配图，是八把钥匙：每张图回答一个"光看代码看不出来"的问题。这里给出"想搞懂什么 → 看哪张图"的反查表。</p>
+<div class="meta"><span>约 4 分钟</span><span>全部离线可开</span></div>
+
+<h2>按问题反查</h2>
+
+<table>
+  <thead><tr><th>你现在的困惑</th><th>看这张图</th><th>类型</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>"服务端、daemon、Agent CLI 到底谁在哪、谁调谁？"</td>
+      <td><a href="../diagrams/01-system-architecture.html">01 系统架构总览</a></td>
+      <td>architecture</td>
+    </tr>
+    <tr>
+      <td>"为什么这个功能不能放那个目录？三层之间谁的箭头朝谁？"</td>
+      <td><a href="../diagrams/02-repo-layers.html">02 仓库分层与依赖方向</a></td>
+      <td>architecture</td>
+    </tr>
+    <tr>
+      <td>"一条 Run 会经过哪些状态？哪两个状态是岔路？啥时候算失败？"</td>
+      <td><a href="../diagrams/03-run-lifecycle.html">03 Run 生命周期</a></td>
+      <td>lifecycle</td>
+    </tr>
+    <tr>
+      <td>"我点下'指派'之后，直到 Agent 跑起来，中间发生了哪几步？"</td>
+      <td><a href="../diagrams/04-run-sequence.html">04 一次 Run 端到端时序</a></td>
+      <td>sequence</td>
+    </tr>
+    <tr>
+      <td>"daemon 怎么知道有活？抢活那一步为什么不冲突？"</td>
+      <td><a href="../diagrams/05-daemon-dispatch.html">05 daemon 唤醒与领取 Run 流程</a></td>
+      <td>workflow</td>
+    </tr>
+    <tr>
+      <td>"事件从哪来、经过谁、最后改了界面上的什么？"</td>
+      <td><a href="../diagrams/06-realtime-dataflow.html">06 实时事件数据流</a></td>
+      <td>dataflow</td>
+    </tr>
+    <tr>
+      <td>"自部署要摆哪几块？daemon 在哪一侧？"</td>
+      <td><a href="../diagrams/07-selfhost-topology.html">07 自部署拓扑</a></td>
+      <td>architecture</td>
+    </tr>
+    <tr>
+      <td>"一次请求要过几道鉴权闸门、凭据在哪一步被换成更小的？"</td>
+      <td><a href="../diagrams/08-permission-chain.html">08 权限校验链</a></td>
+      <td>workflow</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>按课程对应</h2>
+
+<table>
+  <thead><tr><th>课程</th><th>配图</th></tr></thead>
+  <tbody>
+    <tr><td>0001 全貌</td><td>01 系统架构总览</td></tr>
+    <tr><td>0002 领域模型</td><td>01 系统架构总览</td></tr>
+    <tr><td>0003 仓库分层</td><td>02 仓库分层与依赖方向</td></tr>
+    <tr><td>0005 Run 状态机</td><td>03 Run 生命周期</td></tr>
+    <tr><td>0006 端到端时序与凭据链</td><td>04 一次 Run 端到端时序</td></tr>
+    <tr><td>0007 daemon</td><td>05 daemon 唤醒与领取 Run 流程</td></tr>
+    <tr><td>0009 实时同步</td><td>06 实时事件数据流</td></tr>
+    <tr><td>0011 权限与安全</td><td>08 权限校验链</td></tr>
+    <tr><td>0012 自部署</td><td>07 自部署拓扑</td></tr>
+  </tbody>
+</table>
+
+<h2>怎么改这些图</h2>
+
+<p>每张图都由 <code>diagrams/_src/</code> 下同名 JSON 规格渲染而来。改图改规格，不要直接改 HTML。</p>
+
+<pre><code>C:\coding\learning\diagrams\
+├─ 01-system-architecture.html      ← 已交付的可离线打开版本
+├─ 02-repo-layers.html
+├─ ...
+└─ _src/
+   ├─ 01-system-architecture.json   ← 源头在这里
+   ├─ 02-repo-layers.json
+   └─ ...</code></pre>
+
+<p>重新渲染的流程是两步：先 <strong>校验</strong>（9 项构图检查），再 <strong>交付</strong>（冻结 + 渲染成独立 HTML）。八张图当前全部通过校验：<strong>9/9 项、0 错误、0 警告</strong>。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这套"规格 → 校验 → 交付"很像你熟悉的数据库变更流程：<strong>JSON 是 DDL 源文件，校验是编译期检查，HTML 是已部署的产物</strong>。直接改产物等于在数据库里手改数据而不改脚本——下次重新渲染就白改了。</p>
+</div>
+
+<h2>八张图各自的结构要点</h2>
+
+<table>
+  <thead><tr><th>图</th><th>看的时候重点盯住</th></tr></thead>
+  <tbody>
+    <tr><td>01 系统架构总览</td><td>四种客户端 → 一台服务端 → <strong>你自己机器上的</strong> daemon 与工具进程。服务端从不下场执行。</td></tr>
+    <tr><td>02 仓库分层</td><td><code>views</code> 指向 <code>core</code> + <code>ui</code>；<code>ui</code> 没有任何反向箭头；Mobile 只碰 <code>core</code> 的类型。</td></tr>
+    <tr><td>03 Run 生命周期</td><td>主干 <code>queued → dispatched → running → 终态</code>；两条岔路分别指向排期与等目录；<code>cancelled</code> 从所有状态汇入。</td></tr>
+    <tr><td>04 端到端时序</td><td>第 3 步（claim + 签发令牌）到第 6 步（spawn 注入令牌）之间那条凭据暗线。</td></tr>
+    <tr><td>05 daemon 唤醒与领取</td><td>推送与轮询两条路径在哪一步汇合（claim）。</td></tr>
+    <tr><td>06 实时数据流</td><td>事件从"变更发生"到"UI 重渲染"的完整路径，以及两条通道各自的入口。</td></tr>
+    <tr><td>07 自部署拓扑</td><td>daemon 永远在你那侧，不在服务器上。</td></tr>
+    <tr><td>08 权限校验链</td><td>凭据在哪一步被换成范围更小的那一枚。</td></tr>
+  </tbody>
+</table>
+
+<div class="lesson-nav">
+  <a href="04-commands-env.html">← 命令与环境变量</a>
+  <a href="../index.html">回到课程目录 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

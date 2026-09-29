@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0003 · 仓库分层与依赖方向 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 3 课 / 共 14 课</p>
+<p class="kicker">Lesson 03</p>
+<h1>仓库分层：为什么文件不能随便放</h1>
+<p class="deck">Multica 是一个"一套代码跑三个端"的 monorepo。它的分层不是风格偏好，而是有硬边界的工程契约——哪一层能 import 哪一层，写死了。搞懂这个，你才能知道"我想改的功能该动哪个文件"。</p>
+<div class="meta">
+  <span>约 35 分钟</span>
+  <span>对应图表：02 仓库分层与依赖方向</span>
+  <span>对应源码：AGENTS.md · packages/ · apps/ · server/internal/</span>
+</div>
+
+<h2>一、一眼看全仓库</h2>
+
+<pre><code>multica/
+├─ server/            Go 后端（HTTP + WebSocket + daemon + CLI）
+│  ├─ cmd/            可执行入口：server / multica / migrate / maintenance / backfill_*
+│  ├─ internal/       业务实现（43 个子包）
+│  ├─ pkg/            可复用底层能力（14 个子包）
+│  └─ migrations/     数据库迁移（589 组 up/down）
+├─ packages/          前端共享包
+│  ├─ core/           无界面逻辑：API 客户端、Query hooks、Zustand store
+│  ├─ ui/             UI 原语与样式
+│  ├─ views/          Web 与桌面端共用的页面与业务组件
+│  ├─ plugin-sdk/     插件开发包
+│  └─ tsconfig/ eslint-config/
+└─ apps/
+   ├─ web/            Next.js 路由与 Web 专属 UI
+   ├─ desktop/        Electron 外壳与桌面专属状态
+   ├─ mobile/         Expo / React Native（独立一套）
+   ├─ docs/           Fumadocs 文档站
+   └─ ui-lab/         组件实验室</code></pre>
+
+<h2>二、前端：一条单向依赖线</h2>
+
+<p><code>AGENTS.md</code> 把这条规则写成了表格里的一句话，值得逐字读：</p>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Dependency direction is views -&gt; core + ui; core and ui remain independent.</code>（AGENTS.md · Sharing Rules and Package Boundaries）</p>
+</div>
+
+<p>翻译成人话，三条禁令：</p>
+
+<table>
+  <thead><tr><th>包</th><th>能做</th><th>绝对不能做</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>core/</code></td>
+      <td>API 客户端、TanStack Query hooks、共享 Zustand store、类型与校验</td>
+      <td>不引入 UI 库、<code>react-dom</code>、<code>localStorage</code>、<code>process.env</code></td>
+    </tr>
+    <tr>
+      <td><code>ui/</code></td>
+      <td>按钮、对话框这类 UI 原语与共享样式</td>
+      <td>不写业务逻辑；<strong>不许 import <code>@multica/core</code></strong></td>
+    </tr>
+    <tr>
+      <td><code>views/</code></td>
+      <td>页面与业务组件（Web 与桌面共用）</td>
+      <td>不定义 store；不用 <code>next/*</code>、<code>react-router-dom</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>想判断"这个功能该放哪一层"，问一个问题：<strong>它需要知道"当前在哪个平台"吗？</strong></p>
+<ul>
+  <li>不需要 → 放 <code>core/</code> 或 <code>views/</code>，Web 和桌面端同时受益。</li>
+  <li>需要（Next.js 的 router、Electron 的窗口）→ 留在 <code>apps/web</code> 或 <code>apps/desktop</code>，通过适配器（Adapter）把平台能力"注入"到共享层。</li>
+</ul>
+</div>
+
+<p>所以你会看到 <code>views/</code> 里用 <code>useNavigation()</code>、<code>&lt;AppLink&gt;</code> 这种抽象，而不是直接 <code>router.push()</code>。真正的跳转实现由各个 app 提供——这就是"依赖倒置"在前端的样子。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>你熟悉 PL/SQL 里的分层习惯：业务包不该直接读表名，而该调用封装好的数据访问过程。前端这三层是同一个思路——<code>views</code> 是业务包，<code>core</code> 是数据访问层，<code>ui</code> 是纯工具包。</p>
+<p>区别在于：PL/SQL 靠命名约定，这里靠构建工具（ESLint + tsconfig references）<strong>强制</strong>。写错 import 直接报错。</p>
+</div>
+
+<h3>mobile 为什么分家</h3>
+
+<p><code>apps/mobile</code> 只复用 <code>core</code> 的<strong>类型与纯函数</strong>，UI、状态、hooks、i18n、构建、发版全部自己一套。原因不神秘：React Native 的渲染与 Next.js 完全不同，强行共用视图层只会两头受限。</p>
+
+<h2>三、后端：<code>cmd / internal / pkg</code> 三分</h2>
+
+<table>
+  <thead><tr><th>目录</th><th>含义</th><th>里面的东西</th></tr></thead>
+  <tbody>
+    <tr><td><code>server/cmd/</code></td><td>可执行入口（Go 惯例）</td><td><code>server</code>（HTTP 服务）、<code>multica</code>（CLI + daemon）、<code>migrate</code>、<code>maintenance</code>，以及 4 个一次性数据回填程序</td></tr>
+    <tr><td><code>server/internal/</code></td><td>业务实现，<strong>不可被外部仓库 import</strong></td><td><code>handler</code>、<code>service</code>、<code>middleware</code>、<code>daemon</code>、<code>realtime</code>、<code>daemonws</code>、<code>scheduler</code>、<code>integrations</code> 等 43 个包</td></tr>
+    <tr><td><code>server/pkg/</code></td><td>可复用的底层能力</td><td><code>db</code>（sqlc 生成物）、<code>protocol</code>（事件常量）、<code>agent</code>（CLI 适配层）、<code>plugincontract</code>、<code>taskfailure</code></td></tr>
+  </tbody>
+</table>
+
+<p><strong><code>internal</code> 这个名字不是随便起的</strong>：这是 Go 语言的硬机制——放在 <code>internal/</code> 下的包，只有同一模块内部能 import。它把"这是我的私事"变成了编译器级别的约束。</p>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>读 Go 代码时最容易被这个坑住：<code>internal/</code> 下的东西，你在自己的外部项目里 import 不了，即使它长得像公共库。要复用的能力，作者才放在 <code>pkg/</code>。</p>
+</div>
+
+<p>顺带记住几个读代码的锚点（后面每一课都会用到）：</p>
+
+<ul>
+  <li>全部 HTTP 路由 → <code>server/cmd/server/router.go</code></li>
+  <li>中间件 → <code>server/internal/middleware/</code></li>
+  <li>Run 的业务主线 → <code>server/internal/service/task.go</code></li>
+  <li>手写 SQL → <code>server/pkg/db/queries/</code>；生成物 → <code>server/pkg/db/generated/</code></li>
+</ul>
+
+<h2>四、依赖方向图</h2>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>02 仓库分层与依赖方向</strong>——箭头只朝一个方向。看两件事：①<code>views</code> 指向 <code>core</code> 和 <code>ui</code>，而 <code>ui</code> 没有任何反向箭头；②Web 与 Desktop 都指向共享层，Mobile 只碰 <code>core</code> 的类型。</p>
+  <p class="open"><a href="../diagrams/02-repo-layers.html">打开分层图 →</a></p>
+</div>
+
+<h2>五、练习：给你一个需求，判断该动哪</h2>
+
+<table>
+  <thead><tr><th>需求</th><th>该动的目录</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td>Issue 列表增加"按状态筛选"</td><td><code>packages/core</code>（查询参数）+ <code>packages/views</code>（筛选条）</td><td>逻辑两端共用；筛选条是业务组件不是原语</td></tr>
+    <tr><td>给所有按钮加一种新的边框风格</td><td><code>packages/ui</code></td><td>纯样式，不含业务</td></tr>
+    <tr><td>新增一个 HTTP 接口 <code>POST /api/issues/{id}/pin</code></td><td><code>server/internal/handler</code> + <code>server/cmd/server/router.go</code></td><td>路由注册与 handler 分开</td></tr>
+    <tr><td>桌面端点击通知后跳转到对应 Issue</td><td><code>apps/desktop/src/renderer/src/platform/</code></td><td>导航是平台能力，必须由 app 层注入</td></tr>
+    <tr><td>Issue 描述新增一个字段</td><td>迁移 + <code>pkg/db/queries</code> + <code>internal/handler</code> + <code>packages/core/api/schema.ts</code></td><td>跨全栈，见第 10 课</td></tr>
+  </tbody>
+</table>
+
+<h2>六、检索练习</h2>
+
+<div class="quiz" data-answer="c"
+     data-yes="对。ui 是纯原语层，不许依赖 core——它连业务概念都不知道。"
+     data-no="回到那条依赖规则：views -> core + ui，而 core 与 ui 彼此独立。">
+  <p class="q">1. 你在 <code>packages/ui/components/ui/button.tsx</code> 里想 import 一个来自 <code>@multica/core</code> 的枚举，会怎样？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">可以，因为 ui 属于共享层，可以自由引用其他共享包</button>
+    <button class="opt" data-key="b">可以，只要在 tsconfig 里把 core 加进 references 就能通过</button>
+    <button class="opt" data-key="c">不行，这违反依赖方向，ui 必须保持对 core 零依赖</button>
+    <button class="opt" data-key="d">不行，但原因只是会造成循环引用，抽成第三个包即可</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="b"
+     data-yes="正确。internal 是 Go 的编译期私有边界，不是命名习惯。"
+     data-no="想想 Go 的 internal 目录机制：它在编译器层面阻止模块外 import。">
+  <p class="q">2. 你想在自己的独立项目里 import <code>multica/server/internal/service</code>，为什么不行？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为它没有导出任何大写开头的标识符，全是不导出的私有函数</button>
+    <button class="opt" data-key="b">因为 Go 的 internal 目录只允许同一模块内 import，是编译器强制的</button>
+    <button class="opt" data-key="c">因为它依赖了只在 multica 内部私服上发布的第三方库</button>
+    <button class="opt" data-key="d">因为它的许可证禁止在 multica 项目之外复用任何源码</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。共享层不该知道平台细节，导航要以适配器注入。"
+     data-no="判断标准是：这段代码需要知道「当前是 Web 还是桌面端」吗？">
+  <p class="q">3. 一个 Web 与桌面端共用的页面里需要"跳转到某个 Issue"，正确做法是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">用共享层导出的导航适配器与 AppLink，由 app 层注入真实实现</button>
+    <button class="opt" data-key="b">由平台判断后用 next/router 或 react-router 直接跳转，最省事</button>
+    <button class="opt" data-key="c">把跳转逻辑写进 Zustand store，页面只订阅一个跳转目标字段</button>
+    <button class="opt" data-key="d">在两个 app 里各复制一份页面，避免共享层出现平台分支</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，凭记忆说出：<code>core</code>、<code>ui</code>、<code>views</code> 各自"不许做什么"。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <ul>
+      <li><strong>core</strong>：不许有 UI 库、<code>react-dom</code>、<code>localStorage</code>、<code>process.env</code>（要持久化就走 <code>StorageAdapter</code>）。</li>
+      <li><strong>ui</strong>：不许有业务逻辑，也不许 import <code>@multica/core</code>。</li>
+      <li><strong>views</strong>：不许定义 store，不许用 <code>next/*</code> 或 <code>react-router-dom</code>。</li>
+    </ul>
+    <p>共同目的只有一个：让 Web 与桌面端能共用同一份业务代码，同时把平台差异逼到适配器那一层。</p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>AGENTS.md</code> 的 <em>Sharing Rules and Package Boundaries</em> 与 <em>State Rules</em> 两节——这是本仓库最重要的一份工程契约，全篇不长，建议整篇读一遍。</p>
+  <p>辅助：<code>apps/docs/content/docs/developers/architecture.zh.mdx</code>（代码视角的分层表与执行路径）。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："Zustand 和 TanStack Query 到底谁管什么？"——<code>AGENTS.md</code> 的 State Rules 里有明确分界（服务端数据归 Query，客户端状态归 Zustand），第 9 课我们会在实时事件里再碰到它。</p>
+
+<div class="lesson-nav">
+  <a href="0002-domain-model.html">← 0002 · 领域模型</a>
+  <a href="0004-backend-request-path.html">0004 · 一个请求的旅行 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

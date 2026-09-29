@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 术语表 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 速查文档 1 / 5</p>
+<p class="kicker">Reference 01</p>
+<h1>术语表</h1>
+<p class="deck">按字母序排列。每条只给一句话定义 + 一个源码出处，不展开——展开在对应课程里。</p>
+<div class="meta"><span>约 5 分钟</span><span>对应课程：0002 为主</span></div>
+
+<h2>A–F</h2>
+
+<table>
+  <thead><tr><th>术语</th><th>一句话定义</th><th>出处</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Agent</strong> 智能体</td><td>一份配置（provider、系统提示、Skill），<strong>不是进程</strong>。可被指派为 assignee。</td><td><code>internal/agentconfig/</code>；<code>agents.zh.mdx</code></td></tr>
+    <tr><td><strong>Agent CLI</strong></td><td>本机已装好并登录的编码工具（<code>claude</code>、<code>codex</code> 等 26 种），真正干活的那个。</td><td><code>scripts/agent-cli-command-names.txt</code></td></tr>
+    <tr><td><strong>Action</strong></td><td>插件契约的一种关系：插件调用宿主能力，受 scope 限制。</td><td><code>pkg/plugincontract/manifest.go</code></td></tr>
+    <tr><td><strong>assignee</strong> 被指派人</td><td>多态字段：<code>assignee_id</code> 必须配 <code>assignee_type</code> 才能区分人 / Agent / Squad。</td><td><code>AGENTS.md</code> · Backend UUID Rules</td></tr>
+    <tr><td><strong>Autopilot</strong> 自动驾驶</td><td>定时（cron）或 webhook 触发的自动化，按 <code>create_issue</code> 或 <code>run_only</code> 模式派活。</td><td><code>service/autopilot.go</code>；<code>autopilots.zh.mdx</code></td></tr>
+    <tr><td><strong>claim</strong> 认领</td><td>daemon 原子抢到一条 <code>queued</code> 的 Run，服务端同时签发运行令牌。防重复执行。</td><td><code>handler/daemon.go</code>；<code>POST /api/daemon/tasks/claim</code></td></tr>
+    <tr><td><strong>Composio</strong></td><td>第三方 SaaS 桥接集成，把外部工具接成 Agent 可用能力。</td><td><code>internal/integrations/composio/</code></td></tr>
+    <tr><td><strong>daemon</strong> 守护进程</td><td>跑在你机器上的常驻进程，与 <code>multica</code> CLI 同一个二进制。负责登记能力、领取 Run、spawn CLI。</td><td><code>internal/daemon/</code>；<code>CLI_AND_DAEMON.md</code></td></tr>
+    <tr><td><strong>deferred</strong></td><td>Run 状态：已建但未到 <code>fire_at</code>，完全不动。定时唤醒任务的落点。</td><td><code>pkg/db/queries/agent.sql</code></td></tr>
+    <tr><td><strong>dispatched</strong></td><td>Run 状态：已被某 daemon 认领、凭据已签发，但 CLI 还没起。</td><td><code>pkg/protocol/events.go</code></td></tr>
+  </tbody>
+</table>
+
+<h2>H–R</h2>
+
+<table>
+  <thead><tr><th>术语</th><th>一句话定义</th><th>出处</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Hook</strong></td><td>插件契约的一种关系：宿主调用插件能力。声明一次，可被它 opt-in 的任一触发器调用。</td><td><code>pkg/plugincontract/manifest.go</code></td></tr>
+    <tr><td><strong>Inbox</strong> 收件箱</td><td>需要<em>你</em>处理的流：Agent 交回评审、被 @、Run 失败。</td><td><code>packages/core/inbox/</code>；<code>queries/inbox.sql</code></td></tr>
+    <tr><td><strong>Issue</strong> 任务单</td><td>人的工作单元。与 Run 是 1:N：一张单子可能被反复执行。</td><td><code>queries/issue.sql</code>；<code>issues.zh.mdx</code></td></tr>
+    <tr><td><strong>mat_</strong></td><td>运行令牌：<code>mat_</code> + 40 位十六进制，绑定 (agent_id, task_id)，单用途。</td><td><code>internal/auth/jwt.go</code></td></tr>
+    <tr><td><strong>mdt_</strong></td><td>daemon 令牌：<code>mdt_</code> + 40 位十六进制，只能进 <code>/api/daemon/*</code>。</td><td><code>internal/auth/jwt.go</code></td></tr>
+    <tr><td><strong>mul_</strong></td><td>个人访问令牌 PAT：<code>mul_</code> + 40 位十六进制，权限与你的会话等同。</td><td><code>internal/auth/jwt.go</code></td></tr>
+    <tr><td><strong>Multica License</strong></td><td>Apache 2.0 全文 + 附加条件（托管服务、商业嵌入、品牌三方面）。</td><td><code>LICENSE</code> · <code>NOTICE</code></td></tr>
+    <tr><td><strong>Project</strong> 项目</td><td>代码仓库绑定与本地目录规则。决定 daemon 把哪个目录交给 Agent。</td><td><code>queries/project.sql</code>；<code>project-resources</code></td></tr>
+    <tr><td><strong>queued</strong></td><td>Run 状态：在队列里等一个能干的 Runtime 认领。</td><td><code>pkg/protocol/events.go</code></td></tr>
+    <tr><td><strong>Resource</strong></td><td>插件契约的一种关系：不产生任何调用，纯静态贡献（如 Skill 文本）。</td><td><code>pkg/plugincontract/manifest.go</code></td></tr>
+    <tr><td><strong>Run</strong> 执行</td><td>一次"让某个 Agent 去做这个 Issue"的尝试。<strong>代码里叫 <code>task</code></strong>，表名 <code>agent_task_queue</code>。</td><td><code>service/task.go</code></td></tr>
+    <tr><td><strong>Runtime</strong> 运行时</td><td>某台机器上、某个 provider 的一次实际可用安装。由 daemon 扫描注册，会掉线。</td><td><code>queries/runtime.sql</code></td></tr>
+  </tbody>
+</table>
+
+<h2>S–Z</h2>
+
+<table>
+  <thead><tr><th>术语</th><th>一句话定义</th><th>出处</th></tr></thead>
+  <tbody>
+    <tr><td><strong>scope</strong></td><td>插件能调的宿主能力，封闭清单：<code>issues</code>/<code>comments</code>/<code>tasks</code> 的读写、<code>agents:read</code>、<code>members:read</code>、<code>storage:*</code>、<code>net:&lt;domain&gt;</code>。</td><td><code>pkg/plugincontract/manifest.go</code></td></tr>
+    <tr><td><strong>Skill</strong> 技能</td><td>可复用的提示词 / 流程包，派给 Agent 或 Squad，运行时注入到 CLI。</td><td><code>internal/skill/</code>；<code>skills.zh.mdx</code></td></tr>
+    <tr><td><strong>sqlc</strong></td><td>把 <code>.sql</code> 编译成强类型 Go 函数的工具。<code>make sqlc</code> 重新生成。</td><td><code>pkg/db/queries/</code> → <code>pkg/db/generated/</code></td></tr>
+    <tr><td><strong>Squad</strong> 小队</td><td>一组 Agent 的集合，可整体作为被指派人，也可定义内部顺序。</td><td><code>queries/squad.sql</code>；<code>squads.zh.mdx</code></td></tr>
+    <tr><td><strong>Surface</strong></td><td>插件界面：宿主挂在固定位置的 iframe。可执行字节不放在主站源上。</td><td><code>pkg/plugincontract/manifest.go</code></td></tr>
+    <tr><td><strong>waiting_local_directory</strong></td><td>Run 状态：目标本地目录被另一条在途运行占用，daemon 停车等待。仅 <code>in_place</code> 模式存在。</td><td><code>pkg/protocol/events.go</code>；<code>troubleshooting</code></td></tr>
+    <tr><td><strong>wakeup</strong> 唤醒</td><td>Issue 级的触发规则：满足条件（含定时）时自动排一条 Run。</td><td><code>queries/wakeup.sql</code>；<code>service/issue_wakeup*.go</code></td></tr>
+    <tr><td><strong>Workspace</strong> 工作区</td><td>租户与权限边界。所有查询按 <code>workspace_id</code> 过滤；<code>X-Workspace-ID</code> 选择它。</td><td><code>AGENTS.md</code> · Backend UUID Rules</td></tr>
+    <tr><td><strong>X-Workspace-ID</strong></td><td>选择目标工作区的请求头。它只负责"选哪个"，能否进由成员资格决定。</td><td><code>router.go</code>；<code>AGENTS.md</code></td></tr>
+  </tbody>
+</table>
+
+<h2>四个令牌前缀（背下来）</h2>
+
+<table>
+  <thead><tr><th>前缀</th><th>代表</th><th>范围</th></tr></thead>
+  <tbody>
+    <tr><td>Cookie <code>multica_auth</code></td><td>浏览器里的你</td><td>全量 Web API</td></tr>
+    <tr><td><code>mul_</code></td><td>脚本里的你（PAT）</td><td>与你的会话等同</td></tr>
+    <tr><td><code>mdt_</code></td><td>你机器上的 daemon</td><td>仅 <code>/api/daemon/*</code></td></tr>
+    <tr><td><code>mat_</code></td><td>某一次具体的 Run</td><td>仅汇报那一条 Run</td></tr>
+  </tbody>
+</table>
+
+<div class="lesson-nav">
+  <a href="../index.html">← 课程目录</a>
+  <a href="02-code-map.html">代码地图 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>

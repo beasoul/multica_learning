@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0012 · 自部署与本地开发 | Multica 精读课</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="page">
+
+<p class="crumb"><a href="../index.html">Multica 精读课</a> · 第 12 课 / 共 14 课</p>
+<p class="kicker">Lesson 12</p>
+<h1>跑起来：自部署与本地开发两条路</h1>
+<p class="deck">这一课对应 MISSION 里那条硬指标——"两条路都跑通过一次"。好消息是仓库把命令都封好了：你基本不需要手动装 PostgreSQL、也不用手拼 docker compose。</p>
+<div class="meta">
+  <span>约 45 分钟（含动手）</span>
+  <span>对应图表：07 自部署拓扑</span>
+  <span>对应源码：Makefile · SELF_HOSTING*.md · CONTRIBUTING.md · deploy/helm/</span>
+</div>
+
+<h2>一、先分清两条路</h2>
+
+<table>
+  <thead><tr><th></th><th>只想用起来（自部署）</th><th>想改代码（本地开发）</th></tr></thead>
+  <tbody>
+    <tr><td>目标</td><td>跑出一个能用的 Multica 服务</td><td>跑出一个你能改、能断点、能跑测试的实例</td></tr>
+    <tr><td>用镜像还是源码</td><td>官方镜像（或从当前 checkout 构建）</td><td>当前 checkout 源码</td></tr>
+    <tr><td>命令入口</td><td><code>make selfhost</code></td><td><code>make setup</code> / <code>make start</code></td></tr>
+    <tr><td>是否需要 Go / Node 工具链</td><td>不需要</td><td>需要</td></tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p>所有命令都收敛在仓库根的 <code>Makefile</code> 里。<strong>别去猜怎么起环境——<code>make help</code> 就是官方文档。</strong>源码里 <code>AGENTS.md</code> 也明确要求用仓库自带的环境脚本，不要自己手工造数据库。</p>
+</div>
+
+<h2>二、路线 A：自部署（最短路径）</h2>
+
+<pre><code># 用官方镜像起一套完整的自部署栈（.env 不存在会自动创建）
+make selfhost
+
+# 或者：从当前 checkout 构建后端与前端，再起栈
+make selfhost-build
+
+# 停掉
+make selfhost-stop</code></pre>
+
+<p>后端起来之后，把 CLI 指过去：</p>
+
+<pre><code>multica setup self-host
+# 自定义端口
+multica setup self-host --port 9090 --frontend-port 4000
+# 自定义域名（生产）
+multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
+
+# 或者手工配置
+multica config set server_url http://localhost:8080
+multica config set app_url http://localhost:3000
+multica login
+multica daemon start</code></pre>
+
+<p>自部署这件事，仓库给了三份不同深度的文档，按需要挑：</p>
+
+<table>
+  <thead><tr><th>文档</th><th>适合</th></tr></thead>
+  <tbody>
+    <tr><td><code>SELF_HOSTING.md</code></td><td>默认路径：快速起一套能用</td></tr>
+    <tr><td><code>SELF_HOSTING_ADVANCED.md</code></td><td>进阶：自定义、生产加固</td></tr>
+    <tr><td><code>SELF_HOSTING_AI.md</code></td><td>与 AI / 模型侧相关的部署</td></tr>
+    <tr><td><code>apps/docs/content/docs/environment-variables.zh.mdx</code></td><td>环境变量清单</td></tr>
+  </tbody>
+</table>
+
+<h2>三、路线 B：本地开发环境</h2>
+
+<p>这条路的命令设计得很有条理，值得按顺序背下来：</p>
+
+<pre><code>make setup     # 准备当前 checkout：装依赖、确保数据库、跑迁移
+make start     # 起后端 + 前端（会先跑迁移）
+make status    # 看这个环境在跑什么（含身份证明）
+make down      # 停进程，但保留数据库与 profile
+make destroy   # 停掉 + 删数据库 + 删 profile + 释放槽位</code></pre>
+
+<div class="callout key">
+  <span class="tag">关键事实</span>
+<p><code>make down</code> 与 <code>make destroy</code> 的区别是本节最重要的一行：<strong><code>down</code> 保留数据，<code>destroy</code> 清空环境并释放槽位。</strong></p>
+<p>日常在 <code>down</code> 与 <code>start</code> 之间往返；只有"这个环境我不要了"才用 <code>destroy</code>。</p>
+</div>
+
+<h3>Worktree：多分支并行开发的隔离方式</h3>
+
+<p>如果你同时改两个分支，用 git worktree 会各开一份代码目录。仓库对此有专门机制：</p>
+
+<pre><code>make worktree-env    # 为这个 worktree 生成 .env.worktree（唯一数据库名 + 唯一端口）</code></pre>
+
+<div class="source">
+  <span class="lbl">源码原话</span>
+  <p><code>Worktrees share PostgreSQL but have isolated databases/ports. Use the environment scripts and .env.worktree; do not copy the main checkout's .env or manually create a database through an assumed PostgreSQL instance.</code>（AGENTS.md）</p>
+</div>
+
+<p>翻译：<strong>共用同一个 PostgreSQL 容器，但各用各的库名与端口。</strong>不要抄主 checkout 的 <code>.env</code>——那样两个环境会指向同一个库，互相污染。</p>
+
+<div class="callout analogy">
+  <span class="tag">类比</span>
+<p>这在 Oracle 里的对应物很直观：所有开发共用一个实例（<code>db-up</code> 起的那个容器），但每人一个 schema，靠 <code>ALTER SESSION SET CURRENT_SCHEMA</code> 切自己的地盘。</p>
+<p>区别是这里隔离得更彻底——连端口都分开，所以两个环境能同时跑起来不打架。</p>
+</div>
+
+<h3>只起你要改的那一部分</h3>
+
+<pre><code>make api-dev        # 只跑 Go 后端
+make web-dev        # 只跑 Next.js 开发服务器
+make desktop-dev    # 只跑 Electron 桌面端
+make env-exec ARGS="-- pnpm dev:desktop"   # 用本环境的变量跑任意命令</code></pre>
+
+<h3>数据库的日常操作</h3>
+
+<pre><code>make db-up      # 起共享 PostgreSQL 容器（主 checkout 与各 worktree 公用）
+make db-down    # 停容器，但保留数据卷
+make db-reset   # 删掉并重建当前环境的库，然后重跑全部迁移
+make db-drop    # 永久删除当前环境的本地库（会先要你确认）</code></pre>
+
+<p><code>db-reset</code> 是你调试迁移时最常用的：它把第 10 课那 589 组迁移从头跑一遍，正好用来验证自己的迁移能不能一次跑通。</p>
+
+<h2>四、验证代码改对了没有</h2>
+
+<pre><code>make check        # 一个命令跑完：typecheck + TS 测试 + Go 测试 + Playwright E2E</code></pre>
+
+<p>也可以按范围拆开跑（迭代时更省时间）：</p>
+
+<table>
+  <thead><tr><th>范围</th><th>命令</th></tr></thead>
+  <tbody>
+    <tr><td>前端（不含 mobile）</td><td><code>pnpm typecheck</code> · <code>pnpm lint</code> · <code>pnpm test</code></td></tr>
+    <tr><td>Go 后端</td><td><code>make test</code></td></tr>
+    <tr><td>端到端</td><td><code>pnpm exec playwright test</code></td></tr>
+    <tr><td>mobile</td><td>见 <code>apps/mobile/AGENTS.md</code>（根命令不覆盖 mobile）</td></tr>
+  </tbody>
+</table>
+
+<div class="callout watch">
+  <span class="tag">小心</span>
+<p>两条容易踩的边界：</p>
+<ul>
+  <li><strong>根目录的前端命令与 <code>make check</code> 不验证 mobile</strong>。改了移动端要单独跑它的验证。</li>
+  <li><strong>只改文档</strong>时可以用链接/引用检查和 <code>git diff --check</code>；但要在说明里<em>明说没跑代码测试</em>，不要让它看起来像全绿。</li>
+</ul>
+</div>
+
+<h2>五、生产部署与健康检查</h2>
+
+<p>生产路径是 Helm chart，位于 <code>deploy/helm/multica/</code>。本课不深入 K8s，但有两个数字必须记住：</p>
+
+<ul>
+  <li><strong>启动探针给了 10 分钟</strong>——因为迁移在后端启动时执行（第 10 课），大表上的索引构建可能很久。</li>
+  <li>迁移被中断留下的无效索引，runner 在下次启动时会自行清理。</li>
+</ul>
+
+<p>健康检查三个端点，语义不同：</p>
+
+<table>
+  <thead><tr><th>端点</th><th>语义</th></tr></thead>
+  <tbody>
+    <tr><td><code>/health</code></td><td><strong>存活</strong>：进程活着（不查数据库依赖）</td></tr>
+    <tr><td><code>/readyz</code> 与 <code>/healthz</code></td><td><strong>就绪</strong>：可以接流量了（依赖检查通过）</td></tr>
+    <tr><td><code>/health/realtime</code></td><td>实时子系统指标：连接数、慢客户端驱逐、各事件类型发送 QPS。可用 <code>REALTIME_METRICS_TOKEN</code> 加访问限制；未设置时只服务回环调用</td></tr>
+  </tbody>
+</table>
+
+<div class="fig">
+  <p class="fig-label">对应图表</p>
+  <p><strong>07 自部署拓扑</strong>——看这几块怎么摆：PostgreSQL、Go 服务端、Web 前端、你自己机器上的 daemon 与 Agent CLI。注意 daemon 永远在<em>你</em>那侧，不在服务器上。</p>
+  <p class="open"><a href="../diagrams/07-selfhost-topology.html">打开部署拓扑图 →</a></p>
+</div>
+
+<h2>六、动手清单（照着做一遍）</h2>
+
+<ol>
+  <li><code>make selfhost</code>，等它起来。</li>
+  <li>浏览器打开前端地址，注册/登录，建一个工作区。</li>
+  <li>在另一台终端 <code>multica setup self-host</code> 接上，再 <code>multica daemon status</code>，确认检测到了本机 CLI。</li>
+  <li>建一个 Issue 指派给某个 Agent，观察它是否从 <code>queued</code> 走到 <code>running</code>。</li>
+  <li><code>make selfhost-stop</code>。</li>
+  <li>再走一遍开发路线：<code>make setup</code> → <code>make start</code> → <code>make status</code> → <code>make down</code>。</li>
+</ol>
+
+<p>走完这六步，MISSION 里"两条路都跑通过一次"那条就算达成了。</p>
+
+<h2>七、检索练习</h2>
+
+<div class="quiz" data-answer="b"
+     data-yes="对。down 保留数据，destroy 清空数据库与 profile 并释放槽位。"
+     data-no="回想那两个目标名：一个「停」，一个「毁」。">
+  <p class="q">1. <code>make down</code> 和 <code>make destroy</code> 的关键差别是？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">前者停前端，后者停后端，用于分段调试</button>
+    <button class="opt" data-key="b">前者停进程但保留数据库与 profile，后者会删库删 profile 并释放槽位</button>
+    <button class="opt" data-key="c">前者用于主 checkout，后者只对 worktree 有效</button>
+    <button class="opt" data-key="d">两者等价，destroy 只是 down 的强制版本</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="d"
+     data-yes="正确。worktree 共用 PostgreSQL 但库名与端口隔离，要靠生成的 .env.worktree。"
+     data-no="回想那条规则：共享实例、隔离数据库与端口。">
+  <p class="q">2. 你在一个 worktree 里开发，为什么不直接复制主 checkout 的 <code>.env</code>？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">因为 .env 里含密钥，复制会造成凭据泄露风险</button>
+    <button class="opt" data-key="b">因为复制后文件权限会变化，导致服务读不到变量</button>
+    <button class="opt" data-key="c">因为主 checkout 的 .env 没有 worktree 需要的桌面端配置</button>
+    <button class="opt" data-key="d">因为两个环境会指向同一个数据库和端口，互相污染甚至抢占失败</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="quiz" data-answer="a"
+     data-yes="对。/health 是存活性，/readyz 与 /healthz 是就绪性。"
+     data-no="区分一下「进程活着」和「能接流量」这两个不同的问题。">
+  <p class="q">3. 你想让编排系统"数据库连不上时先把流量摘掉、但别重启容器"，应该配哪个端点？</p>
+  <div class="opts">
+    <button class="opt" data-key="a">就绪检查用 <code>/readyz</code>，存活检查用 <code>/health</code></button>
+    <button class="opt" data-key="b">就绪检查用 <code>/health</code>，存活检查用 <code>/readyz</code></button>
+    <button class="opt" data-key="c">两者都用 <code>/health/realtime</code>，它包含依赖状态</button>
+    <button class="opt" data-key="d">两者都用 <code>/health</code>，因为就绪性由探针失败次数推断</button>
+  </div>
+  <p class="fb"></p>
+</div>
+
+<div class="recall">
+  <p><strong>不看上文，写出从零到"能改代码并验证"的命令序列。</strong></p>
+  <p><button class="reveal">显示答案</button></p>
+  <div class="recall-body">
+    <pre><code># 想直接用（不自建源码）
+make selfhost
+multica setup self-host
+multica daemon start
+
+# 想改代码
+make setup            # 装依赖 + 确保数据库 + 跑迁移
+make start            # 起后端与前端
+make status           # 确认在跑什么
+make check            # typecheck + TS 测试 + Go 测试 + E2E
+make down             # 停进程，保留数据
+
+# 需要时
+make worktree-env     # 多分支并行：生成隔离的 .env.worktree
+make db-reset         # 重建库并重跑全部迁移（验证迁移用）
+make destroy          # 彻底清空这个环境</code></pre>
+    <p>判断口诀：<strong>只想用 → <code>selfhost</code>；要改代码 → <code>setup/start/check/down</code>；多分支 → <code>worktree-env</code>。</strong></p>
+  </div>
+</div>
+
+<h2>必读的一手材料</h2>
+
+<div class="source">
+  <span class="lbl">本课主要来源</span>
+  <p><code>Makefile</code>——每个目标后面那行注释就是一小段文档，<code>make help</code> 直接打印它们。</p>
+  <p>辅助：<code>SELF_HOSTING.md</code>（自部署最短路径）；<code>CONTRIBUTING.md</code>（本地安装与 worktree 操作）；<code>AGENTS.md</code> 的 <em>Development and Verification</em>；<code>deploy/helm/multica/</code>。</p>
+</div>
+
+<p class="ask"><strong>我是你的老师，卡住就问。</strong>比如："<code>make check</code> 里 Playwright E2E 跑不起来怎么办？"——这是环境类问题中最常见的一类，通常和 <code>db-up</code> 没起、端口被占有关。把报错贴给我，我们按顺序排。</p>
+
+<div class="lesson-nav">
+  <a href="0011-security.html">← 0011 · 权限与安全</a>
+  <a href="0013-integrations-plugins.html">0013 · 集成与插件系统 →</a>
+</div>
+
+</div>
+<script src="../assets/course.js"></script>
+</body>
+</html>
